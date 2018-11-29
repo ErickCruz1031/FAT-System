@@ -9,6 +9,8 @@ using namespace std;
 #include <deque>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 using namespace std;
 #ifdef __cplusplus
@@ -31,6 +33,7 @@ void AlarmCallback(void *calldata);
 void VMFileWriteCallback(void *calldata, int result);
 void VMFileOpenCallback(void *calldata, int result);
 void infiniteLoop(void *param);
+void ParseFAT();
 void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
@@ -79,6 +82,13 @@ bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
 
  };
 
+ struct Sector
+ {
+    uint8_t Info[512];
+ };
+
+
+
 vector<ThreadControlBlock> thread_list;
 TVMThreadID current_thread_id;
 TVMThreadID idle_id = 1;
@@ -90,6 +100,14 @@ TVMTick tick_count = 0;
 deque<MutexControlBlock> mutex_list;
 const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
 
+//Project 4:
+int fat_fd;
+int sec_per_clus;
+int fat_size;
+int num_fat;
+int root_entry_cnt;
+vector<Sector> FAT_Table;
+
 void (*actual_entry)(void *);
 
 vector<deque<ThreadControlBlock> > ready_threads_list(4); 
@@ -100,7 +118,7 @@ vector<deque<ThreadControlBlock> > ready_threads_list(4);
 
 // TVMStatus VMStart(int tickms, int argc, char *argv[]){
 
-TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, int argc, char *argv[]){
+TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, const char* mount, int argc, char* argv[]){
 
     // CHANGE
 
@@ -202,9 +220,25 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, 
     //Set up the idle thread
     TVMMemorySize mem = 0x1000000;
     TVMThreadID test_threadid;
+
     VMThreadCreate(infiniteLoop, NULL, mem, 0, &test_threadid);
     VMThreadActivate(1);
     
+    //void *calldata = 0;
+
+    // OpenFAT
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
+    void *calldata = &thread_list[current_thread_id].threadID;
+    MachineFileOpen(mount, O_RDWR, 0644, VMCallback, calldata);
+    thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
+    Schedule(); 
+    MachineResumeSignals(sigset);
+    fat_fd = thread_list[current_thread_id].processData;
+
+    ParseFAT();
+    return VM_STATUS_SUCCESS;
+
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
     
     if (vm_main == NULL){
@@ -223,6 +257,52 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize, TVMMemorySize sharedsize, 
     */
 
     return VM_STATUS_SUCCESS;
+}
+
+
+// void OpenFAT();
+
+void ParseFAT(){
+
+    // Parse BPB
+
+    uint8_t Buffer[512];
+    int length = 512;
+
+    VMFileRead(fat_fd, Buffer, &length);
+
+    short fatsz;
+    memcpy(&fat_size, &Buffer[22], 2);
+    memcpy(&sec_per_clus, &Buffer[13], 1);
+    memcpy(&num_fat, &Buffer[16], 1);
+    memcpy(&root_entry_cnt, &Buffer[17], 2);
+
+    cout << "fatsz: " << fat_size << "\n";
+    cout << "sec_per_clus: " << sec_per_clus << "\n";
+    cout << "num_fat: " << num_fat << "\n";
+    cout << "root_entry_cnt: " << root_entry_cnt << "\n";
+
+
+    // Parse FAT
+
+
+    int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
+    int bytes_to_read = (1 + num_fat * fat_size + root_dir_sectors) * 512;
+    uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(uint8_t));
+    VMFileRead(fat_fd, data, &bytes_to_read);
+
+
+
+    for(int i = 0; i < 512; i+= 2)
+    {
+        short temp;
+        memcpy(&temp, &data[512 + i], 2);
+        cout << temp << "\n";
+    }
+
+
+    // Parse Root
+    return;
 }
 
 TVMStatus VMTickMS(int *tickmsref){
@@ -492,6 +572,7 @@ TVMStatus VMFileClose(int filedescriptor){
 }   
 TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
+    cout << "in vmfileread\n";
     if (data == NULL || length == NULL)
     {
         return VM_STATUS_ERROR_INVALID_PARAMETER;
@@ -525,6 +606,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
             data = data + 512 + j;
         }
 
+
         uint8_t* new_data;
         
         VMMemoryPoolAllocate(0, left_over, (void**)&new_data);
@@ -543,6 +625,8 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     }
     else
     {
+        cout << "less than or equal to 512 bytes\n";
+
         uint8_t* new_data;
         
         VMMemoryPoolAllocate(0, *length, (void**)&new_data);
@@ -556,6 +640,8 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
         Schedule();
 
         *length = thread_list[current_thread_id].processData;
+
+        cout << "length is " << *length << "\n";
 
         memcpy(data, new_data, thread_list[current_thread_id].processData);
 
