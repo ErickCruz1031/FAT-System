@@ -82,11 +82,6 @@ bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
 
  };
 
- struct Sector
- {
-    uint8_t Info[512];
- };
-
 
 
 vector<ThreadControlBlock> thread_list;
@@ -101,12 +96,64 @@ deque<MutexControlBlock> mutex_list;
 const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
 
 //Project 4:
+ struct Sector
+ {
+    uint8_t *Info;
+    // int sectorID;
+ };
+ struct FATEntry 
+{
+    short current;
+    short next;
+};
+struct RootEntry
+{
+    bool free;
+    char *shortName; // offset 0, bytes 11
+    bool read_only;
+    bool is_dir;
+    int filesize;
+    short first_cluster_number;
+    bool dirty;
+    int offset;
+    // longEntries
+
+};
+
+struct Cluster
+{
+    int clusterID;
+    uint8_t *cluster_data;
+    uint8_t dirty; // check if it has been modified
+    // sectors
+    // offset
+    // way to clear cluster
+};
+// struct File
+// {
+//     int start_cluster_ID;
+//     char *abs_path;
+//     int size;
+//     // creation_date;
+//     // last_modified;
+//     // last_accessed;
+//     // dirty bit
+//     // RD_only
+// }
 int fat_fd;
 int sec_per_clus;
 int fat_size;
 int num_fat;
 int root_entry_cnt;
-vector<Sector> FAT_Table;
+int num_data_sectors;
+int num_data_clusters;
+int num_total_sectors;
+int root_dir_sectors;
+int root_dir_offset;
+
+vector<FATEntry> FAT_Table;
+vector<RootEntry> root_entries;
+vector<Cluster> data_clusters;
 
 void (*actual_entry)(void *);
 
@@ -176,6 +223,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
         sys_ptr,
         heapsize,
     };
+
     free_blocks_two.push_back(first_sys_block);
     MemoryPoolControlBlock sys_pool = 
     {
@@ -237,7 +285,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
     fat_fd = thread_list[current_thread_id].processData;
 
     ParseFAT();
-    return VM_STATUS_SUCCESS;
+    // return VM_STATUS_SUCCESS;
 
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
     
@@ -271,37 +319,169 @@ void ParseFAT(){
 
     VMFileRead(fat_fd, Buffer, &length);
 
-    short fatsz;
     memcpy(&fat_size, &Buffer[22], 2);
     memcpy(&sec_per_clus, &Buffer[13], 1);
     memcpy(&num_fat, &Buffer[16], 1);
     memcpy(&root_entry_cnt, &Buffer[17], 2);
+    memcpy(&num_total_sectors, &Buffer[19], 2);
+
+    root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
+    num_data_sectors = num_total_sectors - (1 + num_fat * fat_size + root_dir_sectors);
 
     cout << "fatsz: " << fat_size << "\n";
     cout << "sec_per_clus: " << sec_per_clus << "\n";
     cout << "num_fat: " << num_fat << "\n";
     cout << "root_entry_cnt: " << root_entry_cnt << "\n";
-
+    cout << "num_total_sectors: " << num_total_sectors << "\n";
+    cout << "root_dir_sectors: " << root_dir_sectors << "\n";
+    cout << "num_data_sectors: " <<  num_data_sectors << "\n";
 
     // Parse FAT
 
-
     int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
-    int bytes_to_read = (1 + num_fat * fat_size + root_dir_sectors) * 512;
-    uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(uint8_t));
+    int bytes_to_read = (num_fat * fat_size + root_dir_sectors) * 512;
+    uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(void));
     VMFileRead(fat_fd, data, &bytes_to_read);
 
+    cout << "returned from the other read\n";
 
+    int i = 0;
+    int count = 0;
+    int num_entries = (fat_size * 512) / 16;
 
-    for(int i = 0; i < 512; i+= 2)
+    while(count < num_entries)
     {
         short temp;
-        memcpy(&temp, &data[512 + i], 2);
+        FATEntry entry;
+        memcpy(&temp, &data[i], 2);
+        entry.current = count;
+        entry.next = temp;
+        FAT_Table.push_back(entry);
         cout << temp << "\n";
+        i+= 2;
+        count +=1;
+    }
+    cout << "FAT size is " << fat_size << "\n";
+
+    int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
+
+    //cout << "This is the cccc " << p << "\n";
+    cout << "Num_entries is " << num_entries << "\n";
+    cout << "Size of the table is " << FAT_Table.size() << "\n";
+
+    //start reading the directory
+    cout << "Directory...\n";
+    int root_cnt = 0;
+    int j = 0;
+
+    while (root_cnt < root_entry_cnt)
+    {
+        char name [8];
+        memcpy(&name, &data[next_start + j], 8);
+        cout << name << "\n";
+        cout << "Next...\n";
+        j += 32;
+        root_cnt++;
+
     }
 
+    // Parse Root Dir
+    
+    char shortName[11];
+    bool free;
+    bool is_dir;
+    bool read_only;
+    int filesize;
+    uint8_t dirty_bit;
+    bool dirty;
+    uint8_t attribute;
+    short first_cluster_number;
+    // short creation_date;
+    // short creation_time;
+    // short write_date;
+    // short write_time;
 
-    // Parse Root
+    int short_entry_offset = num_fat * fat_size * 512; 
+
+    //for (int j = num_fat * fat_size * 512; j < bytes_to_read - num_data_sectors * 512; j+=32){
+    int k = 0;
+    int root_count = 0;
+    bool long_entry = true;
+    while (root_count < root_entry_cnt){
+        memcpy(&shortName, &data[short_entry_offset + k], 11);
+        memcpy(&attribute, &data[k + 11], 1);
+/*
+        if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
+        	short_entry_offset += 32; 
+    		continue;
+        }
+
+*/     	
+        if (long_entry == true)
+        {
+        	if (shortName[0] & 0x40)
+        	{
+        		long_entry = false;
+        	 	k+=32;
+        		root_count+=1;
+        		continue;
+        	}
+        	else
+        	{
+        		//ong_entry = false;
+        	 	k+=32;
+        		root_count+=1;
+        		continue;
+
+        	}
+        	
+        }
+
+        if (shortName[0] == 0xE00){
+            free = true;
+        }
+        else{
+            free = false;
+            cout << "shortName: " << shortName << "\n";
+            
+        }
+        
+
+        memcpy(&attribute, &data[k + 11], 1);
+        read_only = attribute && 0x1;
+        is_dir = attribute && 0x10;
+        memcpy(&filesize, &data[k + 28], 4);
+        memcpy(&first_cluster_number, &data[k + 26], 2);
+        
+        dirty = false; // TODO: may need to change
+
+        RootEntry new_root_entry = {
+            free,
+            shortName,
+            read_only,
+            is_dir,
+            filesize,
+            first_cluster_number,
+            dirty,
+            short_entry_offset,
+
+            // bool free;
+            // char *shortName; // offset 0, bytes 11
+            // bool read_only;
+            // bool is_dir;
+            // int filesize;
+            // short first_cluster_number;
+            // uint8_t dirty;
+            // int offset;
+        };
+
+        root_entries.push_back(new_root_entry);
+        long_entry = true;
+        k+=32;
+        root_count+=1;
+
+
+    }
     return;
 }
 
@@ -603,7 +783,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
             memcpy(data, new_data, 512);
 
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512;
         }
 
 
@@ -675,7 +855,8 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
     MachineSuspendSignals(sigset);
     if (*length > 512)
     {
-        //cout << "Length is more than expected\n";
+
+        cout << "Length is more than expected\n";
         int times = *length / 512; //How many iterations of 512 we have to do 
         int left_over = *length % 512; //Remainder
         int j = 1;
@@ -694,7 +875,7 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
             Schedule();
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512;
             // data = data + (512 + j); // ?
         }
 
@@ -1474,55 +1655,35 @@ TVMStatus VMMutexRelease(TVMMutexID mutex){ // should disable signals before cal
     return VM_STATUS_SUCCESS;
 }
 
-/* Machine.cpp Changes =======================================
+TVMStatus VMDirectoryOpen(const char *dirname, int *dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
-- void *MachineInitialize(size_t sharesize); -----------------
+TVMStatus VMDirectoryClose(int dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
-MachineInitialize() initializes the machine abstraction layer. 
-The sharesizeparameter specifies the size of the shared memory 
-location to be used by the machine. The size of the shared memory 
-will be set to an integral number of pages (4096 bytes) that covers 
-the size of sharesize.
+TVMStatus VMDirectoryRead(int dirdescriptor, SVMDirectoryEntryRef dirent){
+    return VM_STATUS_SUCCESS;
+}
 
-Upon successful initialization MachineInitialize returns the base 
-address of the shared memory. NULL is returned if the machine has 
-already been initialized. If the memory queues or shared memory fail 
-to be allocated the program exits.
+TVMStatus VMDirectoryRewind(int dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
----------------------------------------------------------------
+TVMStatus VMDirectoryCurrent(char *abspath){
+    return VM_STATUS_SUCCESS;
+}
 
-- voidMachineFileRead(int fd, void*data, int length, 
-                    TMachineFileCallback callback, void *calldata);
+TVMStatus VMDirectoryChange(const char *path){
+    return VM_STATUS_SUCCESS;
+}
 
-MachineFileRead() attempts to read the number of bytes specified in 
-by length into the location specified by data from the file specified 
-by fd. If the datavalue is not a location in the shared memory, 
-MachineFileRead will fail; in addition if length is greater than 512 
-bytes MachineFileRead will also fail. The fdshould have been obtained 
-by a previous call to MachineFileOpen(). The actual number of bytes 
-transferred will be returned in the resultparameter when the 
-callbackfunction is called. Upon failure the resultwill be less 
-than zero.The calldataparameter will also be passed into the 
-callbackfunction upon completion of the read file request. 
-MachineFileRead () should return immediately, but will call the 
-callbackfunction asynchronously when completed.
+TVMStatus VMDirectoryCreate(const char *dirname){
+    return VM_STATUS_SUCCESS;
+}
 
----------------------------------------------------------------
+TVMStatus VMDirectoryUnlink(const char *path){
+    return VM_STATUS_SUCCESS;
+}
 
-- voidMachineFileWrite(int fd, void *data, int length, 
-                       TMachineFileCallback callback, void*calldata);
-
-MachineFileWrite() attempts to write the number of bytes specified 
-in by length into the location specified by data to the file specified 
-by fd. If the data value is not a location in the shared memory, 
-MachineFileWrite will fail; in addition if length is greater than 
-512 bytes MachineFileWrite will also fail. The fd should have been 
-obtained by a previous call to MachineFileOpen(). The actual number 
-of bytestransferred will be returned in the resultparameter when the 
-allbackfunction is called. Upon failure the resultwill be less than 
-zero. The calldataparameter will also be passed into the callback 
-function upon completion of the write file request. MachineFileWrite() 
-should return immediately, but will call the callbackfunction 
-asynchronously when completed.
-
-*/
