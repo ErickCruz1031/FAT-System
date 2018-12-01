@@ -86,7 +86,11 @@ bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
  {
     uint8_t Info[512];
  };
-
+struct Entry 
+{
+    short current;
+    short next;
+};
 
 
 vector<ThreadControlBlock> thread_list;
@@ -106,7 +110,7 @@ int sec_per_clus;
 int fat_size;
 int num_fat;
 int root_entry_cnt;
-vector<Sector> FAT_Table;
+vector<Entry> FAT_Table;
 
 void (*actual_entry)(void *);
 
@@ -287,20 +291,53 @@ void ParseFAT(){
 
 
     int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
-    int bytes_to_read = (1 + num_fat * fat_size + root_dir_sectors) * 512;
+    int bytes_to_read = (num_fat * fat_size + root_dir_sectors) * 512;
     uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(uint8_t));
     VMFileRead(fat_fd, data, &bytes_to_read);
 
+    cout << "returned from the other read\n";
 
+    int i = 0;
+    int count = 0;
+    int num_entries = (fat_size * 512) / 16;
 
-    for(int i = 0; i < 512; i+= 2)
+    while(count < num_entries)
     {
         short temp;
-        memcpy(&temp, &data[512 + i], 2);
+        Entry entry;
+        memcpy(&temp, &data[i], 2);
+        entry.current = i;
+        entry.next = temp;
+        FAT_Table.push_back(entry);
         cout << temp << "\n";
+        i+= 2;
+        count +=1;
+    }
+    cout << "FAT size is " << fat_size << "\n";
+
+    int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
+
+    //cout << "This is the cccc " << p << "\n";
+    cout << "Num_entries is " << num_entries << "\n";
+    cout << "Size of the table is " << FAT_Table.size() << "\n";
+
+    //start reading the directory
+    cout << "Directory...\n";
+    int root_cnt = 0;
+    int j = 0;
+    while (root_cnt < root_entry_cnt)
+    {
+        char name [8];
+        memcpy(&name, &data[next_start + j], 8);
+        cout << name << "\n";
+        cout << "Next...\n";
+        j += 32;
+        root_cnt++;
+
     }
 
 
+    //cout << (char*)data << "\n";
     // Parse Root
     return;
 }
@@ -590,22 +627,41 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
         for(; j <= times; j++)
         {
+            cout << "Total length is " << *length << "\n";
+            cout << "Times is " << times << "\n";
+            cout << "read looop\n";
+            cout << "j is " << j << " and times is " << times << "\n";
             uint8_t* new_data;
         
+            cout << "Right now it has " << Pools[0].bytes_left << "\n";
+            cout << "Allocated size is " << Pools[0].allocated_blocks.size() << "\n";
+            cout << "Free size is " << Pools[0].free_blocks.size() << "\n";
+
             VMMemoryPoolAllocate(0, 512, (void**)&new_data);
             void *calldata = &thread_list[current_thread_id].threadID;
+            cout << "Allocated\n";
+            cout << "NOWW Allocated size is " << Pools[0].allocated_blocks.size() << "\n";
+            cout << "NOWW Free size is " << Pools[0].free_blocks.size() << "\n";
     
             MachineFileRead(filedescriptor, new_data, 512, VMCallback, calldata);
         
             thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
             Schedule();
-
-            memcpy(data, new_data, 512);
-
+            cout << "About to copy\n";
+            cout << "Read is 512 but actually is " << thread_list[current_thread_id].processData << "\n";
+            cout << "Left is " << Pools[0].bytes_left << "\n";
+            if (data == NULL || new_data == NULL)
+            {
+                cout << "WATCH OUT\n";
+            }
+            cout << (char*)new_data << "\n";
+            memcpy(data, new_data, thread_list[current_thread_id].processData);
+            cout << "deallocating\n";
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512 ;
         }
 
+        cout << "We are done\n";
 
         uint8_t* new_data;
         
@@ -615,7 +671,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
         MachineFileRead(filedescriptor, new_data, left_over, VMCallback, calldata);
         thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
         Schedule();
-
+        cout << "Left ovet is " << left_over << " but actually is " << thread_list[current_thread_id].processData << "\n";
         memcpy(data, new_data, left_over);
 
         VMMemoryPoolDeallocate(0, new_data); 
@@ -694,7 +750,7 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
             Schedule();
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512;
             // data = data + (512 + j); // ?
         }
 
