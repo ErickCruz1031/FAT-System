@@ -116,6 +116,11 @@ struct RootEntry
     short first_cluster_number;
     bool dirty;
     int offset;
+    uint16_t creation_date;
+    uint16_t creation_time;
+    uint16_t last_modify_date;
+    uint16_t last_modify_time;
+    uint16_t last_access_date;
     // longEntries
 
 };
@@ -400,16 +405,21 @@ void ParseFAT(){
     // short creation_time;
     // short write_date;
     // short write_time;
+    uint16_t creation_date;
+    uint16_t creation_time;
+    uint16_t last_modify_date;
+    uint16_t last_modify_time;
+    uint16_t last_access_date;
 
-    int short_entry_offset = num_fat * fat_size * 512; 
+    int root_begin = num_fat * fat_size * 512; 
 
     //for (int j = num_fat * fat_size * 512; j < bytes_to_read - num_data_sectors * 512; j+=32){
     int k = 0;
     int root_count = 0;
     bool long_entry = true;
     while (root_count < root_entry_cnt){
-        memcpy(&shortName, &data[short_entry_offset + k], 11);
-        memcpy(&attribute, &data[k + 11], 1);
+        memcpy(&shortName, &data[root_begin + k], 11);
+        memcpy(&attribute, &data[root_begin + k + 11], 1);
 /*
         if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
         	short_entry_offset += 32; 
@@ -436,34 +446,70 @@ void ParseFAT(){
         	}
         	
         }
-
+		char name[11];
         if (shortName[0] == 0xE00){
             free = true;
         }
         else{
             free = false;
-            cout << "shortName: " << shortName << "\n";
+            
+            // for (int l = 0; l < 11; l++){
+
+            // 	memcpy(&name[l], &shortName[l], 1);
+            // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
+            // 	// cout << "ascii: " << (int) shortName[l] << "\n";
+            // }
+            // cout << "name: " << name << "\n";
             
         }
+
         
 
-        memcpy(&attribute, &data[k + 11], 1);
+        memcpy(&attribute, &data[root_begin + k + 11], 1);
         read_only = attribute && 0x1;
         is_dir = attribute && 0x10;
-        memcpy(&filesize, &data[k + 28], 4);
-        memcpy(&first_cluster_number, &data[k + 26], 2);
-        
+        memcpy(&filesize, &data[root_begin + k + 28], 4);
+        memcpy(&first_cluster_number, &data[root_begin + k + 26], 2);
+        memcpy(&creation_date, &data[root_begin + k + 16], 2);
+        memcpy(&creation_time, &data[root_begin + k + 14], 2);
+        memcpy(&last_modify_date, &data[root_begin + k + 24], 2);
+        memcpy(&last_modify_time, &data[root_begin + k + 22], 2);
+        memcpy(&last_access_date, &data[root_begin + k + 18], 2);
+
+        if (!free){
+        	// cout << "shortName: " << shortName << "\n";
+        	// cout << "filesize: " << filesize << "\n";
+        	// if (is_dir){
+        	// 	cout << "is_dir: true\n";
+        	// }
+        	// else{
+        	// 	cout << "is_dir: false\n";
+        	// }
+        	// cout << "first_cluster_number: " << first_cluster_number << "\n";
+        	// cout << "creation date: " << creation_date << "\n";
+        	// cout << "creation time: " << creation_time << "\n";
+        	// cout << "last_modify_date: " << last_modify_date << "\n";
+        	// cout << "last_modify_time: " << last_modify_time << "\n";
+        	// cout << "last access date: " << last_access_date << "\n";
+        	
+        }
+
         dirty = false; // TODO: may need to change
 
         RootEntry new_root_entry = {
             free,
-            shortName,
+            name,
             read_only,
             is_dir,
             filesize,
             first_cluster_number,
             dirty,
-            short_entry_offset,
+            k, 
+            creation_date, 
+   			creation_time, 
+		    last_modify_date,
+		    last_modify_time,
+		    last_access_date,
 
             // bool free;
             // char *shortName; // offset 0, bytes 11
