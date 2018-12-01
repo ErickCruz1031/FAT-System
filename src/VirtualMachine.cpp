@@ -306,7 +306,7 @@ void ParseFAT(){
         short temp;
         Entry entry;
         memcpy(&temp, &data[i], 2);
-        entry.current = i;
+        entry.current = count;
         entry.next = temp;
         FAT_Table.push_back(entry);
         cout << temp << "\n";
@@ -315,7 +315,7 @@ void ParseFAT(){
     }
     cout << "FAT size is " << fat_size << "\n";
 
-    int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
+    int next_start = (512 * fat_size) * 2 ;//Skip over the 2 fat tables
 
     //cout << "This is the cccc " << p << "\n";
     cout << "Num_entries is " << num_entries << "\n";
@@ -327,13 +327,38 @@ void ParseFAT(){
     int j = 0;
     while (root_cnt < root_entry_cnt)
     {
-        char name [8];
-        memcpy(&name, &data[next_start + j], 8);
-        cout << name << "\n";
-        cout << "Next...\n";
+        char name [11];
+        memcpy(&name, &data[next_start + j], 11);
+        if (name[0] == 0x00 || name[0] == 0xE5)
+        {
+            j += 32;
+            root_cnt++;
+            continue;
+        }
+        //cout << "For this one the first byte is " << (short)name[0] << "\n";
+        char num = name[0];
+        num = num << 6;
+        num = num >> 6;
+        cout << "For this one the first byte is " << (short)num << "\n";
+        if (name[0] & 0x40)
+        {
+            cout << "THIS IS THE END OF THE LONG FILENAME\n";
+        }
+        
+        for (int i = 0; i < 11; i++)
+        {
+            cout << name[i];
+        }
+        cout << "\n";
+        //cout << name << "\n";
+        //cout << "Next...\n";
         j += 32;
         root_cnt++;
 
+    }
+    for (int i = 0; i < FAT_Table.size(); i++)
+    {
+        cout << FAT_Table[i].current << " points to " << FAT_Table[i].next << "\n";
     }
 
 
@@ -578,6 +603,20 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
     
     if (filedescriptor == NULL|| filename == NULL){
         return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    cout << "The flags areeeee " << flags << "\n";
+    if (flags && O_CREAT)
+    {
+        cout << "1sttttt\n";
+
+    } 
+    if (flags && O_TRUNC)
+    {
+        cout << "2nddddd\n";
+    }
+    if (flags && O_RDWR)
+    {
+        cout << "3rddddd\n";
     }
 
     TMachineSignalStateRef sigset = NULL;
