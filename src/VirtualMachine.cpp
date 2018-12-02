@@ -34,6 +34,7 @@ void VMFileWriteCallback(void *calldata, int result);
 void VMFileOpenCallback(void *calldata, int result);
 void infiniteLoop(void *param);
 void ParseFAT();
+void AddStdinFiles();
 void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
@@ -127,24 +128,27 @@ struct RootEntry
 
 struct Cluster
 {
-    int clusterID;
+    int clusterID; 
     uint8_t *cluster_data;
-    uint8_t dirty; // check if it has been modified
+    bool dirty; // check  if it has been modified
+
     // sectors
     // offset
     // way to clear cluster
 };
-// struct File
-// {
-//     int start_cluster_ID;
-//     char *abs_path;
-//     int size;
-//     // creation_date;
-//     // last_modified;
-//     // last_accessed;
-//     // dirty bit
-//     // RD_only
-// }
+
+struct File
+{
+	int fileID;
+    int start_cluster_ID;
+    char *abs_path;
+    int size;
+    // creation_date;
+    // last_modified;
+    // last_accessed;
+    // dirty bit
+    // RD_only
+}
 int fat_fd;
 int sec_per_clus;
 int fat_size;
@@ -159,6 +163,7 @@ int root_dir_offset;
 vector<FATEntry> FAT_Table;
 vector<RootEntry> root_entries;
 vector<Cluster> data_clusters;
+vector<File> files_list;
 
 void (*actual_entry)(void *);
 
@@ -290,6 +295,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
     fat_fd = thread_list[current_thread_id].processData;
 
     ParseFAT();
+    AddStdinFiles();
     // return VM_STATUS_SUCCESS;
 
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
@@ -314,6 +320,33 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
 
 
 // void OpenFAT();
+
+void AddStdinFiles(){
+	File stdin_file = {
+		0,
+	    0,
+	    "0",
+	    0,
+	};
+
+	File stdout_file = {
+		1, 
+		1, 
+		"1",
+		1,
+	};
+	
+	File stderror_file = {
+		2, 
+		2, 
+		"2", 
+		2,
+	};
+	files_list.push_back(stdin_file);
+	files_list.push_back(stdout_file);
+	files_list.push_back(stderror_file);
+	return;
+}
 
 void ParseFAT(){
 
@@ -796,9 +829,9 @@ TVMStatus VMFileClose(int filedescriptor){
 
     return VM_STATUS_SUCCESS;
 }   
-TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
-    cout << "in vmfileread\n";
+TVMStatus MainRead(int filedescriptor, void *data, int *length){
+	cout << "in vmfileread\n";
     if (data == NULL || length == NULL)
     {
         return VM_STATUS_ERROR_INVALID_PARAMETER;
@@ -877,7 +910,19 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     
     MachineResumeSignals(sigset);
 
-return VM_STATUS_SUCCESS;
+	return VM_STATUS_SUCCESS;
+}
+
+TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
+
+    if (filedescriptor < 3){
+    	MainRead(filedescriptor, data, length);
+    }
+    else{
+    	// read from FAT file system
+
+    	
+    }
 
 }
 
@@ -1725,11 +1770,12 @@ TVMStatus VMDirectoryChange(const char *path){
     return VM_STATUS_SUCCESS;
 }
 
-TVMStatus VMDirectoryCreate(const char *dirname){
-    return VM_STATUS_SUCCESS;
-}
+// Extra Credit: 
+// TVMStatus VMDirectoryCreate(const char *dirname){
+//     return VM_STATUS_SUCCESS;
+// }
 
-TVMStatus VMDirectoryUnlink(const char *path){
-    return VM_STATUS_SUCCESS;
-}
+// TVMStatus VMDirectoryUnlink(const char *path){
+//     return VM_STATUS_SUCCESS;
+// }
 
