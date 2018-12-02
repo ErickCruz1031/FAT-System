@@ -35,6 +35,7 @@ void VMFileOpenCallback(void *calldata, int result);
 void infiniteLoop(void *param);
 void ParseFAT();
 void AddStdinFiles();
+TVMStatus MainRead(int filedescriptor, void *data, int *length);
 void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
@@ -148,7 +149,21 @@ struct File
     // last_accessed;
     // dirty bit
     // RD_only
-}
+};
+// int fat_fd;
+// uint8_t sec_per_clus;
+// uint16_t fat_size;
+// uint8_t num_fat;
+// uint16_t root_entry_cnt;
+// int num_data_sectors;
+// int num_data_clusters;
+// uint16_t num_total_sectors;
+// int root_dir_sectors;
+// int fat_begin;
+// int root_begin;
+// int data_begin;
+
+// change types:
 int fat_fd;
 int sec_per_clus;
 int fat_size;
@@ -158,7 +173,9 @@ int num_data_sectors;
 int num_data_clusters;
 int num_total_sectors;
 int root_dir_sectors;
-int root_dir_offset;
+int fat_begin;
+int root_begin;
+int data_begin;
 
 vector<FATEntry> FAT_Table;
 vector<RootEntry> root_entries;
@@ -335,7 +352,7 @@ void AddStdinFiles(){
 		"1",
 		1,
 	};
-	
+
 	File stderror_file = {
 		2, 
 		2, 
@@ -355,14 +372,18 @@ void ParseFAT(){
     uint8_t Buffer[512];
     int length = 512;
 
-    VMFileRead(fat_fd, Buffer, &length);
+    MainRead(fat_fd, Buffer, &length);
 
     memcpy(&fat_size, &Buffer[22], 2);
     memcpy(&sec_per_clus, &Buffer[13], 1);
     memcpy(&num_fat, &Buffer[16], 1);
     memcpy(&root_entry_cnt, &Buffer[17], 2);
     memcpy(&num_total_sectors, &Buffer[19], 2);
+    if (num_total_sectors == 0){
+    	memcpy(&num_total_sectors, &Buffer[32], 4);
+    }
 
+    //update globals
     root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
     num_data_sectors = num_total_sectors - (1 + num_fat * fat_size + root_dir_sectors);
 
@@ -377,9 +398,9 @@ void ParseFAT(){
     // Parse FAT
 
     int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
-    int bytes_to_read = (num_fat * fat_size + root_dir_sectors) * 512;
+    int bytes_to_read = (num_fat * fat_size + root_dir_sectors + num_data_sectors) * 512; // changed to read data sectors as well
     uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(void));
-    VMFileRead(fat_fd, data, &bytes_to_read);
+    MainRead(fat_fd, data, &bytes_to_read);
 
     cout << "returned from the other read\n";
 
@@ -444,7 +465,12 @@ void ParseFAT(){
     uint16_t last_modify_time;
     uint16_t last_access_date;
 
-    int root_begin = num_fat * fat_size * 512; 
+    //update globals
+    root_begin = (1 + num_fat * fat_size) * 512; // changed
+    data_begin = root_begin + (root_entry_cnt * 32);
+
+    cout << "root begin: " << root_begin << "\n";
+    cout << "data begin: " << data_begin << "\n";
 
     //for (int j = num_fat * fat_size * 512; j < bytes_to_read - num_data_sectors * 512; j+=32){
     int k = 0;
@@ -509,7 +535,7 @@ void ParseFAT(){
         memcpy(&last_modify_time, &data[root_begin + k + 22], 2);
         memcpy(&last_access_date, &data[root_begin + k + 18], 2);
 
-        if (!free){
+        // if (!free){
         	// cout << "shortName: " << shortName << "\n";
         	// cout << "filesize: " << filesize << "\n";
         	// if (is_dir){
@@ -525,7 +551,7 @@ void ParseFAT(){
         	// cout << "last_modify_time: " << last_modify_time << "\n";
         	// cout << "last access date: " << last_access_date << "\n";
         	
-        }
+        // }
 
         dirty = false; // TODO: may need to change
 
@@ -554,6 +580,7 @@ void ParseFAT(){
             // int offset;
         };
 
+
         root_entries.push_back(new_root_entry);
         long_entry = true;
         k+=32;
@@ -561,6 +588,24 @@ void ParseFAT(){
 
 
     }
+
+    // Parse Data ?
+
+    uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+
+    int clusterID = 0;
+    for (int data_index = data_begin; data_index < num_total_sectors * 512; data_index += sec_per_clus * 512){
+    	uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+    	memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
+    	Cluster new_cluster = {
+    		clusterID,
+    		cluster_data,
+    		false, // may change
+    	};
+    	data_clusters.push_back(new_cluster);
+    	clusterID++;
+    }
+    
     return;
 }
 
@@ -920,7 +965,37 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     }
     else{
     	// read from FAT file system
+    	// all we have is the file descriptor.
+    	// File : fileID is same as fd, start cluster number, use this to go to the correct first FAT
+    	// then iterate through FAT to find next, go through storing pntrs
+    	// then go through data clusters, reading all into data
 
+    	vector<int> data_pointers;
+
+    	// get start cluster from fd:
+    	File read_file = files_list[filedescriptor];
+    	int start_cluster_ID = read_file.start_cluster_ID;
+
+    	// go to entry in fat table associated with the start cluster
+    	// add to data pointer list
+    	FATEntry curr_entry = FAT_Table[start_cluster_ID];
+    	while(curr_entry.current < 0xFFF8){ // not EOC, see pg. 17 fatgen103
+    		data_pointers.push_back(curr_entry.current);
+    		curr_entry = FAT_Table[curr_entry.next];
+    	}
+
+    	// go through data region with data pointers, read into data 
+    	int num_ptrs = data_pointers.size();
+    	int curr_cluster_num;
+    	Cluster curr_cluster;
+    	for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
+    		// find data cluster
+    		curr_cluster_num = data_pointers[ptr_index];
+    		curr_cluster = data_clusters[curr_cluster_num];
+    		// read data from cluster into data
+    		memcpy(data, curr_cluster.cluster_data, 512);
+    		data = data + 512;
+    	}
     	
     }
 
