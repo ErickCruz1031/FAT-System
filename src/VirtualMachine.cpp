@@ -425,28 +425,29 @@ void ParseFAT(){
     int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
 
     //cout << "This is the cccc " << p << "\n";
-    cout << "Num_entries is " << num_entries << "\n";
-    cout << "Size of the table is " << FAT_Table.size() << "\n";
+    // cout << "Num_entries is " << num_entries << "\n";
+    // cout << "Size of the table is " << FAT_Table.size() << "\n";
 
     //start reading the directory
-    cout << "Directory...\n";
+    // cout << "Directory...\n";
     int root_cnt = 0;
     int j = 0;
 
-    while (root_cnt < root_entry_cnt)
-    {
-        char name [8];
-        memcpy(&name, &data[next_start + j], 8);
-        cout << name << "\n";
-        cout << "Next...\n";
-        j += 32;
-        root_cnt++;
+    // while (root_cnt < root_entry_cnt)
+    // {
+    //     char name [8];
+    //     memcpy(&name, &data[next_start + j], 8);
+    //     cout << name << "\n";
+    //     cout << "Next...\n";
+    //     j += 32;
+    //     root_cnt++;
 
-    }
+    // }
 
     // Parse Root Dir
     
-    char shortName[11];
+    uint8_t *shortName = new uint8_t[11];
+    // uint8_t *shortName = (uint8_t *) malloc(sizeof(uint8_t) * 11);
     bool free;
     bool is_dir;
     bool read_only;
@@ -466,7 +467,7 @@ void ParseFAT(){
     uint16_t last_access_date;
 
     //update globals
-    root_begin = (1 + num_fat * fat_size) * 512; // changed
+    root_begin = (num_fat * fat_size) * 512; // changed
     data_begin = root_begin + (root_entry_cnt * 32);
 
     cout << "root begin: " << root_begin << "\n";
@@ -477,7 +478,7 @@ void ParseFAT(){
     int root_count = 0;
     bool long_entry = true;
     while (root_count < root_entry_cnt){
-        memcpy(&shortName, &data[root_begin + k], 11);
+        memcpy(shortName, &data[root_begin + k], 11);
         memcpy(&attribute, &data[root_begin + k + 11], 1);
 /*
         if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
@@ -505,20 +506,27 @@ void ParseFAT(){
         	}
         	
         }
-		char name[11];
+		// char name[11];
         if (shortName[0] == 0xE00){
             free = true;
         }
         else{
             free = false;
-            
+         //    char * new_name = new char [11];
+        	// memcpy(new_name, shortName, 11);
+        	cout << "name: " << (char *)shortName << "\n";
+        	
+        	
+            for (int i = 0; i < 11; i++){
+            	cout << "letter: " << shortName[i] << "\n";
+            }
             // for (int l = 0; l < 11; l++){
 
             // 	memcpy(&name[l], &shortName[l], 1);
             // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
             // 	// cout << "ascii: " << (int) shortName[l] << "\n";
             // }
-            // cout << "name: " << name << "\n";
+           // cout << "name: " << shortName << "\n";
             
         }
 
@@ -534,6 +542,7 @@ void ParseFAT(){
         memcpy(&last_modify_date, &data[root_begin + k + 24], 2);
         memcpy(&last_modify_time, &data[root_begin + k + 22], 2);
         memcpy(&last_access_date, &data[root_begin + k + 18], 2);
+
 
         // if (!free){
         	// cout << "shortName: " << shortName << "\n";
@@ -557,7 +566,7 @@ void ParseFAT(){
 
         RootEntry new_root_entry = {
             free,
-            name,
+            (char *)shortName,
             read_only,
             is_dir,
             filesize,
