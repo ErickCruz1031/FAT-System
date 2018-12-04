@@ -100,7 +100,9 @@ const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
 //Project 4:
  struct Sector
  {
+ 	vector<uint8_t> Info;
     uint8_t *Info;
+
     // int sectorID;
  };
  struct FATEntry 
@@ -108,7 +110,7 @@ const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
     short current;
     short next;
 };
-struct RootEntry
+struct DirEntry
 {
     bool free;
     char *shortName; // offset 0, bytes 11
@@ -130,7 +132,7 @@ struct RootEntry
 struct Cluster
 {
     int clusterID; 
-    uint8_t *cluster_data;
+    vector<Sector> cluster_data;
     bool dirty; // check  if it has been modified
 
     // sectors
@@ -142,7 +144,8 @@ struct File
 {
 	int fileID;
     int start_cluster_ID;
-    char *abs_path;
+    // int dir_cluster_ID;
+    vector<string> abs_path;
     int size;
     // creation_date;
     // last_modified;
@@ -150,6 +153,15 @@ struct File
     // dirty bit
     // RD_only
 };
+struct Directory = {
+	int directoryID, 
+	vector<string> abs_path;
+	vector<Directory> dir_path;
+	int start_cluster_ID;
+	vector<DirEntry> entries;
+};
+
+vector<Directory> dir_list;
 // int fat_fd;
 // uint8_t sec_per_clus;
 // uint16_t fat_size;
@@ -177,8 +189,12 @@ int fat_begin;
 int root_begin;
 int data_begin;
 
+vector<string> cwd; 
+int cwd_offset;
+File curr_dir;
+
 vector<FATEntry> FAT_Table;
-vector<RootEntry> root_entries;
+vector<DirEntry> root_entries;
 vector<Cluster> data_clusters;
 vector<File> files_list;
 
@@ -313,6 +329,21 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
 
     ParseFAT();
     AddStdinFiles();
+    vector<string> root_path;
+    root_path.append("/");
+    cwd.push_back("/"); // add root directory
+    cwd = root_begin;
+
+    vector<Directory> root_dir_vec;
+    Directory root = {
+    	0,
+    	cwd,
+    	root_dir_vec,
+    	0, // may change 
+    }
+    dir_list.push_back(root);
+  	
+
     // return VM_STATUS_SUCCESS;
 
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
@@ -398,7 +429,7 @@ void ParseFAT(){
     // Parse FAT
 
     int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
-    int bytes_to_read = (num_fat * fat_size + root_dir_sectors + num_data_sectors) * 512; // changed to read data sectors as well
+    int bytes_to_read = (num_fat * fat_size + root_dir_sectors) * 512; // changed to read data sectors as well
     uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(void));
     MainRead(fat_fd, data, &bytes_to_read);
 
@@ -467,8 +498,11 @@ void ParseFAT(){
     uint16_t last_access_date;
 
     //update globals
-    root_begin = (num_fat * fat_size) * 512; // changed
+    root_begin = (1 + num_fat * fat_size) * 512; // changed
     data_begin = root_begin + (root_entry_cnt * 32);
+
+    int parse_root_begin = num_fat * fat_size * 512;
+    // int parse_data_begin = parse_root_begin + (root_entry_cnt * 32);
 
     cout << "root begin: " << root_begin << "\n";
     cout << "data begin: " << data_begin << "\n";
@@ -478,8 +512,8 @@ void ParseFAT(){
     int root_count = 0;
     bool long_entry = true;
     while (root_count < root_entry_cnt){
-        memcpy(shortName, &data[root_begin + k], 11);
-        memcpy(&attribute, &data[root_begin + k + 11], 1);
+        memcpy(shortName, &data[parse_root_begin + k], 11);
+        memcpy(&attribute, &data[parse_root_begin + k + 11], 1);
 /*
         if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
         	short_entry_offset += 32; 
@@ -516,7 +550,7 @@ void ParseFAT(){
         	// memcpy(new_name, shortName, 11);
         	cout << "name: " << (char *)shortName << "\n";
         	
-        	
+
             for (int i = 0; i < 11; i++){
             	cout << "letter: " << shortName[i] << "\n";
             }
@@ -532,16 +566,16 @@ void ParseFAT(){
 
         
 
-        memcpy(&attribute, &data[root_begin + k + 11], 1);
+        memcpy(&attribute, &data[parse_root_begin + k + 11], 1);
         read_only = attribute && 0x1;
         is_dir = attribute && 0x10;
-        memcpy(&filesize, &data[root_begin + k + 28], 4);
-        memcpy(&first_cluster_number, &data[root_begin + k + 26], 2);
-        memcpy(&creation_date, &data[root_begin + k + 16], 2);
-        memcpy(&creation_time, &data[root_begin + k + 14], 2);
-        memcpy(&last_modify_date, &data[root_begin + k + 24], 2);
-        memcpy(&last_modify_time, &data[root_begin + k + 22], 2);
-        memcpy(&last_access_date, &data[root_begin + k + 18], 2);
+        memcpy(&filesize, &data[parse_root_begin + k + 28], 4);
+        memcpy(&first_cluster_number, &data[parse_root_begin + k + 26], 2);
+        memcpy(&creation_date, &data[parse_root_begin + k + 16], 2);
+        memcpy(&creation_time, &data[parse_root_begin + k + 14], 2);
+        memcpy(&last_modify_date, &data[parse_root_begin + k + 24], 2);
+        memcpy(&last_modify_time, &data[parse_root_begin + k + 22], 2);
+        memcpy(&last_access_date, &data[parse_root_begin + k + 18], 2);
 
 
         // if (!free){
@@ -564,7 +598,7 @@ void ParseFAT(){
 
         dirty = false; // TODO: may need to change
 
-        RootEntry new_root_entry = {
+        DirEntry new_root_entry = {
             free,
             (char *)shortName,
             read_only,
@@ -598,22 +632,25 @@ void ParseFAT(){
 
     }
 
+    dir_list[0].entries.push_back(root_entries);
+
+
     // Parse Data ?
 
-    uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+    // uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
 
-    int clusterID = 0;
-    for (int data_index = data_begin; data_index < num_total_sectors * 512; data_index += sec_per_clus * 512){
-    	uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
-    	memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
-    	Cluster new_cluster = {
-    		clusterID,
-    		cluster_data,
-    		false, // may change
-    	};
-    	data_clusters.push_back(new_cluster);
-    	clusterID++;
-    }
+    // int clusterID = 0;
+    // for (int data_index = data_begin; data_index < num_total_sectors * 512; data_index += sec_per_clus * 512){
+    // 	uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+    // 	memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
+    // 	Cluster new_cluster = {
+    // 		clusterID,
+    // 		cluster_data,
+    // 		false, // may change
+    // 	};
+    // 	data_clusters.push_back(new_cluster);
+    // 	clusterID++;
+    // }
     
     return;
 }
@@ -979,6 +1016,9 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     	// then iterate through FAT to find next, go through storing pntrs
     	// then go through data clusters, reading all into data
 
+    	TMachineSignalStateRef sigset = NULL;
+   		MachineSuspendSignals(sigset);
+
     	vector<int> data_pointers;
 
     	// get start cluster from fd:
@@ -1000,11 +1040,18 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     	for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
     		// find data cluster
     		curr_cluster_num = data_pointers[ptr_index];
-    		curr_cluster = data_clusters[curr_cluster_num];
+    		for(int i = 0; i < data_clusters.size(); i++){
+    			if (data_clusters[i].clusterID == curr_cluster_num){
+    				curr_cluster = data_clusters[i];
+    			}
+    		}
+    		
     		// read data from cluster into data
     		memcpy(data, curr_cluster.cluster_data, 512);
     		data = data + 512;
     	}
+    	MachineResumeSignals(sigset);
+    	return VM_STATUS_SUCCESS
     	
     }
 
@@ -1831,10 +1878,15 @@ TVMStatus VMMutexRelease(TVMMutexID mutex){ // should disable signals before cal
 }
 
 TVMStatus VMDirectoryOpen(const char *dirname, int *dirdescriptor){
+	// iterate through files, 
+
+
+
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryClose(int dirdescriptor){
+
     return VM_STATUS_SUCCESS;
 }
 
@@ -1847,10 +1899,34 @@ TVMStatus VMDirectoryRewind(int dirdescriptor){
 }
 
 TVMStatus VMDirectoryCurrent(char *abspath){
+	int cwd_size = cwd.size();
+	string new_string;
+	for (int i = 0; i < cwd_size; i++){
+		new_string = new_string + cwd[i];
+	}
+	*abspath = new_string.c_str();
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryChange(const char *path){
+	string new_path(path);
+	int path_len = new_path.size();
+	cwd.clear();
+	string path_dir;
+	for (int i = 0; i < path_len; i++){
+		if (path[i] == "/"){
+			if (i == 0){ // root dir
+				cwd.push_back("/"); // root dir
+				continue;
+			}
+			cwd.push_back(path_dir);
+			path_dir.clear();
+		}
+		else{
+			path_dir.push_back(path[i]);
+		}
+		
+	}
     return VM_STATUS_SUCCESS;
 }
 
