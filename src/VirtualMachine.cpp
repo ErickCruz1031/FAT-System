@@ -107,8 +107,8 @@ const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
  };
  struct FATEntry 
 {
-    short current;
-    short next;
+    uint16_t current;
+    uint16_t next;
 };
 struct DirEntry
 {
@@ -117,7 +117,7 @@ struct DirEntry
     bool read_only;
     bool is_dir;
     int filesize;
-    short first_cluster_number;
+    uint16_t first_cluster_number;
     bool dirty;
     int offset;
     uint16_t creation_date;
@@ -486,7 +486,7 @@ void ParseFAT(){
     uint8_t dirty_bit;
     bool dirty;
     uint8_t attribute;
-    short first_cluster_number;
+    uint16_t first_cluster_number;
     // short creation_date;
     // short creation_time;
     // short write_date;
@@ -519,7 +519,6 @@ void ParseFAT(){
         	short_entry_offset += 32; 
     		continue;
         }
-
 */     	
         if (long_entry == true)
         {
@@ -540,9 +539,11 @@ void ParseFAT(){
         	}
         	
         }
+
 		// char name[11];
-        if (shortName[0] == 0xE00){
+        if (shortName[0] == 0x00){
             free = true;
+            break; 
         }
         else{
             free = false;
@@ -636,6 +637,25 @@ void ParseFAT(){
 
 
     // Parse Data ?
+    
+    // root directory is dir_list
+    DirEntry curr_entry;
+    // add to the entries field of the root directory
+
+    vector<string> path_name;
+    string root_name ("/");
+    path_name.push_back(root_name);
+
+    for (int root_index = 0; root_index < root_entry_cnt; root_index++){
+    	curr_entry = root_entries[root_index];
+    	dir_list[0].entries.push_back(curr_entry);
+    	if (curr_entry.is_dir){
+    		RecurseDirectories(curr_entry, root_name);
+    	}
+    	
+    }	
+
+    // go through the subdirectories
 
     // uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
 
@@ -654,6 +674,206 @@ void ParseFAT(){
     
     return;
 }
+
+void RecurseDirectories(DirEntry curr_entry, vector<string> path_name){
+	string filename(curr_entry.shortName);
+	int dirID = dir_list.size();
+    
+	vector<int> data_pointers;
+
+	FatEntry curr_fat = FAT_Table[first_cluster_number];
+
+	while (curr_entry.current < 0xFFF8){
+		data_pointers.push_back(curr_fat.current);
+		curr_fat = Fat_Table[curr_fat.next];
+	}
+
+	int num_data_pointers = data_pointers.size(); // also equals to the number of clusters
+	// int num_bytes_in_dir = num_data_pointers * sec_per_clus * 512;
+	int bytes_per_clus = 512 * sec_per_clus;
+	int curr_ptr;
+	int actual_cluster_num;
+	int cluster_byte_offset;
+	int new_offset;
+	int length;
+	int num_entries = bytes_per_clus / 32; // ?
+
+	bool free;
+    bool is_dir;
+    bool read_only;
+    int filesize;
+    uint8_t dirty_bit;
+    bool dirty;
+    uint8_t attribute;
+    uint16_t first_cluster_number;
+    uint16_t creation_date;
+    uint16_t creation_time;
+    uint16_t last_modify_date;
+    uint16_t last_modify_time;
+    uint16_t last_access_date;
+
+    vector<DirEntry> dir_entries;
+
+	for(int i = 0; i < num_data_pointers; i++){
+		uint8_t *dir_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+		curr_ptr = data_pointers[i];
+		actual_cluster_num = curr_ptr - 2;
+		cluster_byte_offset = data_begin + actual_cluster_num * bytes_per_clus; // bytes past beginning of image
+		VMFileSeek(fat_fd, cluster_byte_offset, 0, &new_offset);
+		length = bytes_per_clus;
+		MainRead(fat_fd, dir_data, &length);
+
+		// with current cluster, read 32-bit entries
+		// for (int j = 0; j < num_entries; j++){
+
+		// }
+		done = false;
+		
+		DirEntry newEntry; 
+		
+		long_entry = false;
+
+		for(int i = 0; (!done) ; i+= 32){
+			// uint8_t *shortName = new uint8_t[11];
+			// memcpy(shortName, &dir_data[i], 11);
+
+			// if (shortName[0] == 0xE00){
+			// 	free = true;
+			// }
+			// else{
+			// 	free = false;
+
+			// }
+
+			// memcpy(&read_nly)
+			uint8_t *shortName = new uint8_t[11];
+
+			memcpy(shortName, &dir_data[i], 11);
+	/*
+	        if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
+	        	short_entry_offset += 32; 
+	    		continue;
+	        }
+	*/     	
+	        if (long_entry == true)
+	        {
+	        	if (shortName[0] & 0x40)
+	        	{
+	        		long_entry = false;
+	        	 	k+=32;
+	        		root_count+=1;
+	        		continue;
+	        	}
+	        	else
+	        	{
+	        		//ong_entry = false;
+	        	 	k+=32;
+	        		root_count+=1;
+	        		continue;
+
+	        	}
+	        	
+	        }
+
+			// char name[11];
+	        if (shortName[0] == 0x00){
+	            free = true;
+	            break;
+	        }
+	        else{
+	            free = false;
+	         //    char * new_name = new char [11];
+	        	// memcpy(new_name, shortName, 11);
+	        	cout << "name: " << (char *)shortName << "\n";
+	        	
+
+	            for (int i = 0; i < 11; i++){
+	            	cout << "letter: " << shortName[i] << "\n";
+	            }
+	            // for (int l = 0; l < 11; l++){
+
+	            // 	memcpy(&name[l], &shortName[l], 1);
+	            // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
+	            // 	// cout << "ascii: " << (int) shortName[l] << "\n";
+	            // }
+	           // cout << "name: " << shortName << "\n";
+	            
+	        }
+
+	        
+
+	        memcpy(&attribute, &data[i + 11], 1);
+	        read_only = attribute && 0x1;
+	        is_dir = attribute && 0x10;
+	        memcpy(&filesize, &data[i + 28], 4);
+	        memcpy(&first_cluster_number, &data[i + 26], 2);
+	        memcpy(&creation_date, &data[i + 16], 2);
+	        memcpy(&creation_time, &data[i + 14], 2);
+	        memcpy(&last_modify_date, &data[i + 24], 2);
+	        memcpy(&last_modify_time, &data[i + 22], 2);
+	        memcpy(&last_access_date, &data[i + 18], 2);
+
+
+	        // if (!free){
+	        	// cout << "shortName: " << shortName << "\n";
+	        	// cout << "filesize: " << filesize << "\n";
+	        	// if (is_dir){
+	        	// 	cout << "is_dir: true\n";
+	        	// }
+	        	// else{
+	        	// 	cout << "is_dir: false\n";
+	        	// }
+	        	// cout << "first_cluster_number: " << first_cluster_number << "\n";
+	        	// cout << "creation date: " << creation_date << "\n";
+	        	// cout << "creation time: " << creation_time << "\n";
+	        	// cout << "last_modify_date: " << last_modify_date << "\n";
+	        	// cout << "last_modify_time: " << last_modify_time << "\n";
+	        	// cout << "last access date: " << last_access_date << "\n";
+	        	
+	        // }
+
+	        dirty = false; // TODO: may need to change
+
+	        DirEntry new_entry = {
+	            free,
+	            (char *)shortName,
+	            read_only,
+	            is_dir,
+	            filesize,
+	            first_cluster_number,
+	            dirty,
+	            k, 
+	            creation_date, 
+	   			creation_time, 
+			    last_modify_date,
+			    last_modify_time,
+			    last_access_date,
+
+			}
+
+			dir_entries.push_back(new_entry);
+		}
+
+	}		
+
+    vector<string> add_to_path = path_name.push_back(filename);
+	Directory new_dir = {
+		dirID,
+		add_to_path,
+		curr_entry.start_cluster_ID,
+		dir_entries,
+	}
+
+	dir_list.push_back(new_dir);
+
+    int num_dir_entries = dir_entries.size();
+    for (int dir_index = 0; dir_index < num_dir_entries; dir_index++){
+        if (dir_entries[dir_index].is_dir){
+            RecurseDirectories(dir_entries[dir_index], add_to_path);
+        }
+    }
+}
+
 
 TVMStatus VMTickMS(int *tickmsref){
     //cout << "In tick MS\n";
@@ -1046,10 +1266,11 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     			}
     		}
     		
-    		// read data from cluster into data
+    		// TODO: change to put data into a vector of sectors
     		memcpy(data, curr_cluster.cluster_data, 512);
     		data = data + 512;
     	}
+    	// *length = length;
     	MachineResumeSignals(sigset);
     	return VM_STATUS_SUCCESS
     	
