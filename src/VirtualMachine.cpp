@@ -40,7 +40,8 @@ void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
 int openCluster();
-void offsetIndex(int* cluster, *int sector, int*byte, int fd);
+void offsetIndex(int* cluster, int* sector, int*byte, int fd);
+
 
  struct ThreadControlBlock;
  struct MutexControlBlock;
@@ -1301,8 +1302,29 @@ TVMStatus MainRead(int filedescriptor, void *data, int *length){
 
 	return VM_STATUS_SUCCESS;
 }
-void offsetIndex(int* cluster, *int sector, int*byte, int fd)
+void offsetIndex(int* cluster, int* sector, int*byte, int fd)
 {
+    cout << "Initial offset is " << root_entries[fd].offset << "\n";
+    int counter = 0;
+    int offset = root_entries[fd].pointer_offset;
+    int cluster_bytes = sec_per_clus * 512; //Num of bytes per cluster
+    while(offset > cluster_bytes)
+    {
+        offset = offset - cluster_bytes;
+        counter++;
+    }//Get the index of which cluter this offset is at 
+    *cluster = counter;
+    offset = root_entries[fd].pointer_offset;
+    int sectors_occ = offset / 512; //Number of sectors that it takes up
+    int bit = offset % 512;
+    if (bit > 0)
+    {
+        sectors_occ++;
+    }//If there is a remainder then it starts on the next sector
+    *sector = sectors_occ;
+    *byte = bit;
+
+
 
 }
 TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
@@ -1345,12 +1367,16 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     	int curr_cluster_num;
     	Cluster curr_cluster;
         cout << "Reading this amount: " << num_bytes << "\n";
-        int cluter_index = 0
+        int cluster_index = 0;
         int sector_index = 0;
         int byte_index = 0;
         //C
-
-    	for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
+        offsetIndex(&cluster_index, &sector_index, &byte_index, filedescriptor);
+    	//for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
+        cout << "Cluster index is " << cluster_index << "\n";
+        cout << "Sector index is " << sector_index << "\n";
+        cout << "Byte is " << byte_index << "\n";
+        for(int ptr_index = cluster_index; ptr_index < num_ptrs; ptr_index++){
     		// find data cluster
     		curr_cluster_num = data_pointers[ptr_index];
             cout << "Cluster " << curr_cluster_num << "\n";
@@ -1365,11 +1391,13 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
                 }
             }
             cout << "About to start reading\n";
-            for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
+            //for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
+            for(int j = sector_index; j < data_clusters[i].cluster_data.size(); j++)
             {
                 vector<uint8_t> content;
                 int count = 0;
-                for(int k = 0; (k < (data_clusters[i].cluster_data[j].Info.size())) && (k < 512) && (num_bytes > 0); k++)
+                //for(int k = 0; (k < (data_clusters[i].cluster_data[j].Info.size())) && (k < 512) && (num_bytes > 0); k++)
+                for(int k = byte_index; (k < (data_clusters[i].cluster_data[j].Info.size())) && (k < 512) && (num_bytes > 0); k++)
                 {
                     //data = data_clusters[i].cluster_data[j].Info[k];
                     //cout << "k is " << k << "\n";
