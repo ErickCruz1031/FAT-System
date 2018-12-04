@@ -34,9 +34,13 @@ void VMFileWriteCallback(void *calldata, int result);
 void VMFileOpenCallback(void *calldata, int result);
 void infiniteLoop(void *param);
 void ParseFAT();
+void AddStdinFiles();
+TVMStatus MainRead(int filedescriptor, void *data, int *length);
 void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
+int openCluster();
+void offsetIndex(int* cluster, *int sector, int*byte, int fd);
 
  struct ThreadControlBlock;
  struct MutexControlBlock;
@@ -82,11 +86,6 @@ bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
 
  };
 
- struct Sector
- {
-    uint8_t Info[512];
- };
-
 
 
 vector<ThreadControlBlock> thread_list;
@@ -101,12 +100,95 @@ deque<MutexControlBlock> mutex_list;
 const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
 
 //Project 4:
+ struct Sector
+ {
+    vector<uint8_t> Info;
+    int ID;
+    // int sectorID;
+ };
+ struct FATEntry 
+{
+    short current;
+    short next;
+};
+
+struct Cluster
+{
+    int clusterID; 
+    vector<Sector> cluster_data;
+    bool dirty; // check  if it has been modified
+
+    // sectors
+    // offset
+    // way to clear cluster
+};
+
+struct RootEntry
+{
+    bool free;
+    char shortName [11]; // offset 0, bytes 11
+    bool read_only;
+    bool is_dir;
+    int filesize;
+    short first_cluster_number;
+    bool dirty;
+    int offset;
+    uint16_t creation_date;
+    uint16_t creation_time;
+    uint16_t last_modify_date;
+    uint16_t last_modify_time;
+    uint16_t last_access_date;
+    vector<Cluster> Sectors;
+    bool seek;
+    int pointer_offset;
+    // longEntries
+
+};
+
+
+struct File
+{
+	int fileID;
+    int start_cluster_ID;
+    char *abs_path;
+    int size;
+    // creation_date;
+    // last_modified;
+    // last_accessed;
+    // dirty bit
+    // RD_only
+};
+// int fat_fd;
+// uint8_t sec_per_clus;
+// uint16_t fat_size;
+// uint8_t num_fat;
+// uint16_t root_entry_cnt;
+// int num_data_sectors;
+// int num_data_clusters;
+// uint16_t num_total_sectors;
+// int root_dir_sectors;
+// int fat_begin;
+// int root_begin;
+// int data_begin;
+
+// change types:
 int fat_fd;
 int sec_per_clus;
 int fat_size;
 int num_fat;
 int root_entry_cnt;
-vector<Sector> FAT_Table;
+int num_data_sectors;
+int num_data_clusters;
+int num_total_sectors;
+int root_dir_sectors;
+int fat_begin;
+int root_begin;
+int data_begin;
+
+vector<FATEntry> FAT_Table;
+vector<RootEntry> root_entries;
+vector<Cluster> data_clusters;
+vector<File> files_list;
 
 void (*actual_entry)(void *);
 
@@ -176,6 +258,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
         sys_ptr,
         heapsize,
     };
+
     free_blocks_two.push_back(first_sys_block);
     MemoryPoolControlBlock sys_pool = 
     {
@@ -235,8 +318,10 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
     Schedule(); 
     MachineResumeSignals(sigset);
     fat_fd = thread_list[current_thread_id].processData;
+    cout << "FD IS " <<fat_fd << "\n";
 
     ParseFAT();
+    AddStdinFiles();
     return VM_STATUS_SUCCESS;
 
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
@@ -262,6 +347,33 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
 
 // void OpenFAT();
 
+void AddStdinFiles(){
+	File stdin_file = {
+		0,
+	    0,
+	    "0",
+	    0,
+	};
+
+	File stdout_file = {
+		1, 
+		1, 
+		"1",
+		1,
+	};
+
+	File stderror_file = {
+		2, 
+		2, 
+		"2", 
+		2,
+	};
+	files_list.push_back(stdin_file);
+	files_list.push_back(stdout_file);
+	files_list.push_back(stderror_file);
+	return;
+}
+
 void ParseFAT(){
 
     // Parse BPB
@@ -269,39 +381,340 @@ void ParseFAT(){
     uint8_t Buffer[512];
     int length = 512;
 
-    VMFileRead(fat_fd, Buffer, &length);
+    MainRead(fat_fd, Buffer, &length);
 
-    short fatsz;
     memcpy(&fat_size, &Buffer[22], 2);
     memcpy(&sec_per_clus, &Buffer[13], 1);
     memcpy(&num_fat, &Buffer[16], 1);
     memcpy(&root_entry_cnt, &Buffer[17], 2);
+    memcpy(&num_total_sectors, &Buffer[19], 2);
+    if (num_total_sectors == 0){
+    	memcpy(&num_total_sectors, &Buffer[32], 4);
+    }
+
+    //update globals
+    root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
+    num_data_sectors = num_total_sectors - (1 + num_fat * fat_size + root_dir_sectors);
 
     cout << "fatsz: " << fat_size << "\n";
     cout << "sec_per_clus: " << sec_per_clus << "\n";
     cout << "num_fat: " << num_fat << "\n";
     cout << "root_entry_cnt: " << root_entry_cnt << "\n";
-
+    cout << "num_total_sectors: " << num_total_sectors << "\n";
+    cout << "root_dir_sectors: " << root_dir_sectors << "\n";
+    cout << "num_data_sectors: " <<  num_data_sectors << "\n";
 
     // Parse FAT
 
-
     int root_dir_sectors = (root_entry_cnt * 32 + 511) / 512;
-    int bytes_to_read = (1 + num_fat * fat_size + root_dir_sectors) * 512;
-    uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(uint8_t));
-    VMFileRead(fat_fd, data, &bytes_to_read);
+    int bytes_to_read = (num_fat * fat_size + root_dir_sectors) * 512; // changed to read data sectors as well
+    uint8_t * data = (uint8_t *) malloc(bytes_to_read * sizeof(void));
+    MainRead(fat_fd, data, &bytes_to_read);
 
+    cout << "returned from the other read\n";
 
+    int i = 0;
+    int count = 0;
+    int num_entries = (fat_size * 512) / 16;
 
-    for(int i = 0; i < 512; i+= 2)
+    while(count < num_entries)
     {
         short temp;
-        memcpy(&temp, &data[512 + i], 2);
-        cout << temp << "\n";
+        FATEntry entry;
+        memcpy(&temp, &data[i], 2);
+        entry.current = count;
+        entry.next = temp;
+        FAT_Table.push_back(entry);
+        //cout << temp << "\n";
+        i+= 2;
+        count +=1;
+    }
+    cout << "FAT size is " << fat_size << "\n";
+
+    int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
+
+    //cout << "This is the cccc " << p << "\n";
+    // cout << "Num_entries is " << num_entries << "\n";
+    // cout << "Size of the table is " << FAT_Table.size() << "\n";
+
+    //start reading the directory
+    // cout << "Directory...\n";
+    int root_cnt = 0;
+    int j = 0;
+
+    // while (root_cnt < root_entry_cnt)
+    // {
+    //     char name [8];
+    //     memcpy(&name, &data[next_start + j], 8);
+    //     cout << name << "\n";
+    //     cout << "Next...\n";
+    //     j += 32;
+    //     root_cnt++;
+
+    // }
+
+    // Parse Root Dir
+    
+    char *shortName = new char[11];
+    // uint8_t *shortName = (uint8_t *) malloc(sizeof(uint8_t) * 11);
+    bool free;
+    bool is_dir;
+    bool read_only;
+    int filesize;
+    uint8_t dirty_bit;
+    bool dirty;
+    uint8_t attribute;
+    short first_cluster_number;
+    // short creation_date;
+    // short creation_time;
+    // short write_date;
+    // short write_time;
+    uint16_t creation_date;
+    uint16_t creation_time;
+    uint16_t last_modify_date;
+    uint16_t last_modify_time;
+    uint16_t last_access_date;
+
+    //update globals
+    root_begin = (num_fat * fat_size) * 512; // changed
+    data_begin = root_begin + (root_entry_cnt * 32);
+
+    cout << "root begin: " << root_begin << "\n";
+    cout << "data begin: " << data_begin << "\n";
+
+    //for (int j = num_fat * fat_size * 512; j < bytes_to_read - num_data_sectors * 512; j+=32){
+    int k = 0;
+    int root_count = 0;
+    bool long_entry = true;
+    while (root_count < root_entry_cnt){
+        //cout << "looping\n";
+        memcpy(shortName, &data[root_begin + k], 11);
+        memcpy(&attribute, &data[root_begin + k + 11], 1);
+/*
+        if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
+        	short_entry_offset += 32; 
+    		continue;
+        }
+
+*/     	
+        if (long_entry == true)
+        {
+        	if (shortName[0] & 0x40)
+        	{
+        		long_entry = false;
+        	 	k+=32;
+        		root_count+=1;
+        		continue;
+        	}
+        	else
+        	{
+        		//ong_entry = false;
+        	 	k+=32;
+        		root_count+=1;
+        		continue;
+
+        	}
+        	
+        }
+		// char name[11];
+        if (shortName[0] == 0xE00){
+            free = true;
+        }
+        else{
+            free = false;
+         //    char * new_name = new char [11];
+        	// memcpy(new_name, shortName, 11);
+        	//cout << "name: " << (char *)shortName << "\n";
+        	
+        	
+            for (int i = 0; i < 11; i++){
+            	cout <<shortName[i] ;
+            }
+            cout << "\n";
+            // for (int l = 0; l < 11; l++){
+
+            // 	memcpy(&name[l], &shortName[l], 1);
+            // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
+            // 	// cout << "ascii: " << (int) shortName[l] << "\n";
+            // }
+           // cout << "name: " << shortName << "\n";
+            
+        }
+
+        
+
+        memcpy(&attribute, &data[root_begin + k + 11], 1);
+        read_only = attribute && 0x1;
+        is_dir = attribute && 0x10;
+        memcpy(&filesize, &data[root_begin + k + 28], 4);
+        memcpy(&first_cluster_number, &data[root_begin + k + 26], 2);
+        memcpy(&creation_date, &data[root_begin + k + 16], 2);
+        memcpy(&creation_time, &data[root_begin + k + 14], 2);
+        memcpy(&last_modify_date, &data[root_begin + k + 24], 2);
+        memcpy(&last_modify_time, &data[root_begin + k + 22], 2);
+        memcpy(&last_access_date, &data[root_begin + k + 18], 2);
+
+
+        // if (!free){
+        	// cout << "shortName: " << shortName << "\n";
+        	// cout << "filesize: " << filesize << "\n";
+        	// if (is_dir){
+        	// 	cout << "is_dir: true\n";
+        	// }
+        	// else{
+        	// 	cout << "is_dir: false\n";
+        	// }
+        	// cout << "first_cluster_number: " << first_cluster_number << "\n";
+        	// cout << "creation date: " << creation_date << "\n";
+        	// cout << "creation time: " << creation_time << "\n";
+        	// cout << "last_modify_date: " << last_modify_date << "\n";
+        	// cout << "last_modify_time: " << last_modify_time << "\n";
+        	// cout << "last access date: " << last_access_date << "\n";
+        	
+        // }
+
+        dirty = false; // TODO: may need to change
+        /*
+        RootEntry new_root_entry = {
+            free,
+            *shortName,
+            read_only,
+            is_dir,
+            filesize,
+            first_cluster_number,
+            dirty,
+            k, 
+            creation_date, 
+   			creation_time, 
+		    last_modify_date,
+		    last_modify_time,
+		    last_access_date,
+
+        };
+        */
+        RootEntry new_entry;
+        int mod_index = root_entries.size();
+        new_entry.free = free;
+        for(int i = 0; i < 11; i++)
+        {
+            new_entry.shortName[i] = shortName[i];
+        }
+        new_entry.read_only = read_only;
+        new_entry.is_dir = is_dir;
+        new_entry.filesize = filesize;
+        new_entry.first_cluster_number = first_cluster_number;
+        new_entry.dirty = dirty;
+        new_entry.offset = k;
+        new_entry.creation_date = creation_date;
+        new_entry.creation_time = creation_time;
+        new_entry.last_modify_date = last_access_date;
+        new_entry.last_modify_time = last_modify_time;
+        new_entry.last_access_date = last_access_date;
+
+        root_entries.push_back(new_entry);
+        root_entries[mod_index].seek = false;
+        root_entries[mod_index].pointer_offset = 0;
+
+        cout << "Before IT IS : ";
+        cout << string(root_entries[0].shortName) << "\n";
+        long_entry = true;
+        k+=32;
+        root_count+=1;
+
+
     }
 
+    // Parse Data ?
 
-    // Parse Root
+       //update globals
+    root_begin = (1 + (num_fat * fat_size)) * 512; // changed
+    data_begin = root_begin + (root_entry_cnt * 32);
+    //TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
+    cout << "AFTER IT IS : ";
+    cout << string(root_entries[0].shortName) << "\n";
+    cout << "The size os " << root_entries.size();
+    int fd;
+    VMFileOpen("LONGTEST.TXT", O_CREAT, 0600, &fd);
+    VMFileOpen("OTHER.TXT", O_CREAT, 0600, &fd);
+    
+    
+
+    cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+   // cout << "The size of the vector is " << data_clusters.size() << "\n";
+    for(int i = 0; i < data_clusters.size(); i++)
+    {
+         cout << "The size of the vector is " << data_clusters.size() << "\n";
+        for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
+        {
+            cout << "j is " << j << "\n";
+            cout << "i is " << i << " \n";
+            cout << "THIS IS CLUSTER " << data_clusters[i].clusterID << "\n";
+            cout << "Size of the cluster data is " << data_clusters[i].cluster_data.size() << "\n";
+            cout << "The size of this sector is  " << data_clusters[i].cluster_data[j].Info.size() << "\n";
+            cout << "Sector number is " << data_clusters[i].cluster_data[j].ID << "\n";;
+            for(int k = 0; k < data_clusters[i].cluster_data[j].Info.size(); k+=16)
+            {
+                
+                
+                for(int p = 0; p < 16; p++){
+                        printf("%02X ", data_clusters[i].cluster_data[j].Info[k+p]);
+                    }
+                for(int p = 0; p < 16; p++){
+                        if(isprint(data_clusters[i].cluster_data[j].Info[k+p])){
+                            printf("%c",data_clusters[i].cluster_data[j].Info[k+p]);
+                        }
+                        else{
+                            printf(".");
+                        }
+                    }
+                    printf("\n");
+
+
+
+                /*
+                for(int i = 0; i < 512; i += 16){
+                    for(int j = 0; j < 16; j++){
+                        printf("%02X ", cluster_data[i+j]);
+                    }
+                    for(int j = 0; j < 16; j++){
+                        if(isprint(cluster_data[i+j])){
+                            printf("%c",cluster_data[i+j]);
+                        }
+                        else{
+                            printf(".");
+                        }
+                    }
+                    printf("\n");
+                }
+                */
+
+            }
+        }
+    }
+    uint8_t buff[1024];
+    int h = 1024;
+    //Need a system to tell which are system fd's and which are not
+    fd = fd + 100;
+    VMFileRead(fd, buff, &h);
+    cout << "RETURNED FROM READ\n";
+    for(int i = 0; i < 1024; i += 16){
+        if (i == 512)
+        {
+            printf("\n");
+        }
+        for(int j = 0; j < 16; j++){
+            printf("%02X ", buff[i+j]);
+        }
+        for(int j = 0; j < 16; j++){
+            if(isprint(buff[i+j])){
+                printf("%c",buff[i+j]);
+            }
+            else{
+                printf(".");
+            }
+        }
+        printf("\n");
+    }
     return;
 }
 
@@ -537,13 +950,248 @@ TVMStatus VMThreadSleep(TVMTick tick){
     
 }
 
+int openCluster()
+{
+    for(int i = 0; i < FAT_Table.size(); i++)
+    {
+        if (FAT_Table[i].next = 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
 TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor){
     
     if (filedescriptor == NULL|| filename == NULL){
         return VM_STATUS_ERROR_INVALID_PARAMETER;
     }
 
-    TMachineSignalStateRef sigset = NULL;
+    cout << "The flags areeeee " << flags << "\n";
+    if (flags && O_CREAT)
+    {
+        cout << "1sttttt\n";
+
+    } 
+    if (flags && O_TRUNC)
+    {
+        cout << "2nddddd\n";
+    }
+    if (flags && O_RDWR)
+    {
+        cout << "3rddddd\n";
+    }
+
+    bool found = false;
+    int index;
+    string name = string(filename);
+    cout << "Looking for " << name << "\n";
+    for (int i = 0; i < root_entries.size(); i++)
+    {
+        int k = 0;//K is for the name input
+        int j = 0;//J is for the one in the root directory
+        int count = 0;
+        cout << "We are going to " << string(root_entries[i].shortName) << "\n";
+        string root_name = string(root_entries[i].shortName);
+        cout << "STRING NOW is " << root_name << "\n";
+        while (k < name.length() && j < 11)
+        {
+
+            cout << "Comparing "<< root_name[j] << " and " << name[k] << "\n";
+            if (root_name[j] == 32)
+            {
+                j++;//Do not increment k
+                continue;
+            }
+            if (name[k] == 46)
+            {
+                k++;
+                count++;
+                continue;
+            }
+            if (root_name[j] == name[k])//Skip periods
+            {
+                cout << "Equal and count is "<< count << "\n";
+                count++;
+                if (count == name.length())//Getting rid of period/extension characters
+                {
+                    index = i;
+                    found = true;
+                    break;
+                }
+            }
+            j++;
+            k++;
+        }
+        if (found)
+        {
+            break;
+        }
+    }//Check to see if its already in the root directory
+    cout << "Out of that loop\n";
+    if (!found)
+    {
+        cout << "Not found\n";
+        RootEntry New;
+        SVMDateTime Time;
+        New.free = false;
+        //New.shortName = new char[11];
+        for(int i = 0; i < 11 && i < name.length(); i++)
+        {
+            New.shortName[i] = name[i];
+        }
+        New.read_only = false; //???
+        New.is_dir = false;
+        New.filesize = false;
+        New.first_cluster_number = openCluster();
+        New.dirty = false;
+        New.offset = 0;
+        New.seek = false;
+        New.pointer_offset = 0;
+        VMDateTime(&Time);
+        index = root_entries.size();
+        root_entries.push_back(New);
+        //Just make a SVMDATETIME for each root entry and parse before copying it back into the FAT image
+
+        //uint16_t creation_date;
+        //uint16_t creation_time;
+        //uint16_t last_modify_date;
+        //uint16_t last_modify_time;
+        //uint16_t last_access_date;
+        // longEntries
+        //Maybe when we open we load al clusters of file into mem
+
+    }
+
+    int current = root_entries[index].first_cluster_number;
+    cout << "USing this one for the calcs: " << string(root_entries[index].shortName) << "\n";
+    *filedescriptor = index;
+    int next;
+
+    //uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+    if (found)
+    {
+        cout << "FOUND\n";
+        cout << "first cluster is " << current << "\n";
+        cout << "DATA starts at byte " << data_begin<< "\n"; 
+        cout << "THis is sector " << data_begin / 512 << "\n";
+        cout << "FD is " << fat_fd << "\n";
+        int sec_count = data_begin / 512;
+        int clusterID = 0;
+        bool finished = false;
+        TMachineSignalStateRef sigset = NULL;
+        //uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+        //uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * 512);
+        //uint8_t *original = cluster_data;
+        MachineSuspendSignals(sigset);
+        while (current != -1)
+        {
+            uint8_t *cluster_data;
+            vector<Sector> Data;
+         
+            for(int i = 0; i < FAT_Table.size(); i++)
+            {
+                if (FAT_Table[i].current == current)
+                {
+                    next = FAT_Table[i].next;
+                    if (next == -1)
+                    {
+                        finished = true;
+                    }
+                    break;
+
+                }
+            }//Get Next 
+            cout << "Current cluster is " << current << " and next is " << next << "\n";
+            //Seek to the cluster before reading
+            //MachineSuspendSignals(sigset);
+            void *calldata = &thread_list[current_thread_id].threadID;
+            int cluster_location = data_begin + ((current - 2) * (sec_per_clus * 512));//Offset from 0
+            //Added the -2
+            int loc = cluster_location / 512;
+            cout << "Data begin is " << data_begin << "\n";
+            cout << "cluster location is " << cluster_location << "\n";
+            //fat_fd;
+            //Seek to the cluster
+            MachineFileSeek(fat_fd, cluster_location, SEEK_SET, VMModCallback, calldata);
+            thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
+            Schedule();
+            //MachineFileRead(filedescriptor, new_data, 512, VMCallback, calldata);
+            cout << "THE SEEK RETURNED " << thread_list[current_thread_id].processData << "\n";
+            for (int k = 0; k < sec_per_clus; k++)
+            {
+                Sector Temp;
+                Data.push_back(Temp);//The index of it is k 
+                cout << "This is sector " << loc + k << "\n";
+                //uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * (sec_per_clus * 512));
+                
+                VMMemoryPoolAllocate(0, 512, (void**)&cluster_data);
+                MachineFileRead(fat_fd, cluster_data, 512, VMModCallback, calldata); //Read the actual cluster
+                thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
+                Schedule();
+                cout << "Read is " << thread_list[current_thread_id].processData << "\n";
+                //cout << (char*)cluster_data << "\n";
+                //cout << "Returned and got this\n";
+                /*
+                for(int i = 0; i < 512; i += 16){
+                    for(int j = 0; j < 16; j++){
+                        printf("%02X ", cluster_data[i+j]);
+                    }
+                    for(int j = 0; j < 16; j++){
+                        if(isprint(cluster_data[i+j])){
+                            printf("%c",cluster_data[i+j]);
+                        }
+                        else{
+                            printf(".");
+                        }
+                    }
+                    printf("\n");
+                }
+                */
+                for(int i = 0; i < 512; i++)
+                {
+                    Data[k].Info.push_back(cluster_data[i]);
+                }
+                Data[k].ID = loc + k; //Put its sector number in there
+               // cout << "\n";
+                //cluster_data = cluster_data + 512;
+            }//Loop to read a sector at a time
+            cout << "--------------------------------\n";
+            //cout << cluster_data << "\n";
+            
+            
+
+            //memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
+            Cluster new_cluster = {
+                current,
+                Data,
+                false, // may change
+            };
+            //cout << "CLuster is this: \n";
+            //cout << (char*)cluster_data << "\n";
+            data_clusters.push_back(new_cluster);
+            VMMemoryPoolDeallocate(0,cluster_data);
+            current = next;
+            //clusterID++;
+        }   
+        MachineResumeSignals(sigset);
+    }
+    else
+    {
+        vector<Sector> Data;
+        Cluster new_cluster = {
+                current,
+                Data,
+                false, // may change
+        };
+        data_clusters.push_back(new_cluster);
+
+    }
+
+
+
+  /*  
     MachineSuspendSignals(sigset);
     void *calldata = &thread_list[current_thread_id].threadID;
     MachineFileOpen(filename, flags, mode, VMModCallback, calldata);
@@ -551,7 +1199,7 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
     Schedule(); 
     MachineResumeSignals(sigset);
     *filedescriptor = thread_list[current_thread_id].processData;
-
+*/
     if (*filedescriptor < 0){
         return VM_STATUS_FAILURE;
     }
@@ -570,9 +1218,9 @@ TVMStatus VMFileClose(int filedescriptor){
 
     return VM_STATUS_SUCCESS;
 }   
-TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
-    cout << "in vmfileread\n";
+TVMStatus MainRead(int filedescriptor, void *data, int *length){
+	cout << "in vmfileread\n";
     if (data == NULL || length == NULL)
     {
         return VM_STATUS_ERROR_INVALID_PARAMETER;
@@ -603,7 +1251,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
             memcpy(data, new_data, 512);
 
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512;
         }
 
 
@@ -651,7 +1299,106 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     
     MachineResumeSignals(sigset);
 
-return VM_STATUS_SUCCESS;
+	return VM_STATUS_SUCCESS;
+}
+void offsetIndex(int* cluster, *int sector, int*byte, int fd)
+{
+
+}
+TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
+
+    cout << "In FVMFileRead\n";
+    cout << "fd is " << filedescriptor << "\n";
+    if (filedescriptor < 3){
+    	MainRead(filedescriptor, data, length);
+    }
+    
+    else{
+    	// read from FAT file system
+    	// all we have is the file descriptor.
+    	// File : fileID is same as fd, start cluster number, use this to go to the correct first FAT
+    	// then iterate through FAT to find next, go through storing pntrs
+    	// then go through data clusters, reading all into data
+
+    	vector<int> data_pointers;
+
+    	// get start cluster from fd:
+        cout << "Going to check\n";
+        filedescriptor = filedescriptor - 100; //Decode the file descriptor
+    	//File read_file = files_list[filedescriptor];
+    	int current = root_entries[filedescriptor].first_cluster_number;
+        int next;
+        
+        cout << "About to loop and first is " << current << "\n";
+    	// go to entry in fat table associated with the start cluster
+    	// add to data pointer list
+    	//FATEntry curr_entry = FAT_Table[start_cluster_ID];
+    	//while(curr_entry.current < 0xFFF8){ // not EOC, see pg. 17 fatgen103
+        while(current != -1){ 
+    		data_pointers.push_back(current);
+    		current = FAT_Table[current].next;
+    	}
+        cout << "Found the end\n";
+    	// go through data region with data pointers, read into data 
+        int num_bytes = *length;
+    	int num_ptrs = data_pointers.size();
+    	int curr_cluster_num;
+    	Cluster curr_cluster;
+        cout << "Reading this amount: " << num_bytes << "\n";
+        int cluter_index = 0
+        int sector_index = 0;
+        int byte_index = 0;
+        //C
+
+    	for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
+    		// find data cluster
+    		curr_cluster_num = data_pointers[ptr_index];
+            cout << "Cluster " << curr_cluster_num << "\n";
+    		//curr_cluster = data_clusters[curr_cluster_num];
+            //The indexes are not in order
+            int i = 0;
+            for(; i < data_clusters.size(); i++)
+            {
+                if (curr_cluster_num == data_clusters[i].clusterID)
+                {
+                    break;
+                }
+            }
+            cout << "About to start reading\n";
+            for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
+            {
+                vector<uint8_t> content;
+                int count = 0;
+                for(int k = 0; (k < (data_clusters[i].cluster_data[j].Info.size())) && (k < 512) && (num_bytes > 0); k++)
+                {
+                    //data = data_clusters[i].cluster_data[j].Info[k];
+                    //cout << "k is " << k << "\n";
+                    //cout << "Size is " << data_clusters[i].cluster_data[j].Info.size() << "\n";
+                    //cout << "Copying " << (int)data_clusters[i].cluster_data[j].Info[k] << "\n";
+                    if (data == NULL)
+                    {
+                        cout << "NOO\n";
+                    }
+                    
+                    //cout << "After \n";
+                    content.push_back(data_clusters[i].cluster_data[j].Info[k]);
+                    root_entries[filedescriptor].pointer_offset++; //Each time you read a byte, you move over the pointer
+                    count++;
+                    //data = data + 1;
+                    num_bytes --;
+                }
+                cout << "Read a total of " << count << "\n";
+                uint8_t* ptr = content.data();
+                memcpy(data, ptr, count);
+                data = data + count;
+            }
+
+    		// read data from cluster into data
+    		//memcpy(data, curr_cluster.cluster_data, 512);
+    		//data = data + 512;
+    	}
+    	
+    }
 
 }
 
@@ -675,7 +1422,8 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
     MachineSuspendSignals(sigset);
     if (*length > 512)
     {
-        //cout << "Length is more than expected\n";
+
+        cout << "Length is more than expected\n";
         int times = *length / 512; //How many iterations of 512 we have to do 
         int left_over = *length % 512; //Remainder
         int j = 1;
@@ -694,7 +1442,7 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
             thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
             Schedule();
             VMMemoryPoolDeallocate(0, new_data);
-            data = data + 512 + j;
+            data = data + 512;
             // data = data + (512 + j); // ?
         }
 
@@ -742,22 +1490,67 @@ return VM_STATUS_SUCCESS;
 
 TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset){
 
-
-    TMachineSignalStateRef sigset = NULL;
-    MachineSuspendSignals(sigset);
-
-    void *calldata = &thread_list[current_thread_id].threadID;
-    MachineFileSeek(filedescriptor, offset, whence, VMModCallback, calldata);
-    thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
-    Schedule(); 
-    MachineResumeSignals(sigset);
-
-    if (newoffset != NULL)
+    if (filedescriptor < 3)
     {
-        *newoffset = thread_list[current_thread_id].processData;
-    }
+        TMachineSignalStateRef sigset = NULL;
+        MachineSuspendSignals(sigset);
 
-    return VM_STATUS_SUCCESS;
+        void *calldata = &thread_list[current_thread_id].threadID;
+        MachineFileSeek(filedescriptor, offset, whence, VMModCallback, calldata);
+        thread_list[current_thread_id].state = VM_THREAD_STATE_WAITING;
+        Schedule(); 
+        MachineResumeSignals(sigset);
+
+        if (newoffset != NULL)
+        {
+            *newoffset = thread_list[current_thread_id].processData;
+        }
+
+        return VM_STATUS_SUCCESS;
+    } //If the fd is less than 3, then do it as before
+    else//If this is a file that is in the FAT image
+    {
+        vector<int> data_pointers;
+
+    	// get start cluster from fd:
+        cout << "Going to check\n";
+        filedescriptor = filedescriptor - 100; //Decode the file descriptor
+        if (filedescriptor >= root_entries.size())
+        {
+            return VM_STATUS_FAILURE;
+        }
+
+        if ((whence + offset) > root_entries[filedescriptor].filesize)
+        {
+            return VM_STATUS_FAILURE;
+        }
+        else
+        {
+            root_entries[filedescriptor].pointer_offset = whence + offset;
+            root_entries[filedescriptor].seek = true;
+            *newoffset = whence + offset;
+        }
+        /*
+        int cluster_bytes = sec_per_clus * 512; //Number of bytes in one cluster
+    	//File read_file = files_list[filedescriptor];
+    	int current = root_entries[filedescriptor].first_cluster_number;
+        int next;
+        
+        cout << "About to loop and first is " << current << "\n";
+    	// go to entry in fat table associated with the start cluster
+    	// add to data pointer list
+    	//FATEntry curr_entry = FAT_Table[start_cluster_ID];
+    	//while(curr_entry.current < 0xFFF8){ // not EOC, see pg. 17 fatgen103
+        while(current != -1){ 
+    		data_pointers.push_back(current);
+    		current = FAT_Table[current].next;
+    	}
+        cout << "Found the end\n";
+        int file_bytes = data_pointers.size() * cluster_bytes;
+        */
+
+
+    }
 
 }
 
@@ -1474,55 +2267,36 @@ TVMStatus VMMutexRelease(TVMMutexID mutex){ // should disable signals before cal
     return VM_STATUS_SUCCESS;
 }
 
-/* Machine.cpp Changes =======================================
+TVMStatus VMDirectoryOpen(const char *dirname, int *dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
-- void *MachineInitialize(size_t sharesize); -----------------
+TVMStatus VMDirectoryClose(int dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
-MachineInitialize() initializes the machine abstraction layer. 
-The sharesizeparameter specifies the size of the shared memory 
-location to be used by the machine. The size of the shared memory 
-will be set to an integral number of pages (4096 bytes) that covers 
-the size of sharesize.
+TVMStatus VMDirectoryRead(int dirdescriptor, SVMDirectoryEntryRef dirent){
+    return VM_STATUS_SUCCESS;
+}
 
-Upon successful initialization MachineInitialize returns the base 
-address of the shared memory. NULL is returned if the machine has 
-already been initialized. If the memory queues or shared memory fail 
-to be allocated the program exits.
+TVMStatus VMDirectoryRewind(int dirdescriptor){
+    return VM_STATUS_SUCCESS;
+}
 
----------------------------------------------------------------
+TVMStatus VMDirectoryCurrent(char *abspath){
+    return VM_STATUS_SUCCESS;
+}
 
-- voidMachineFileRead(int fd, void*data, int length, 
-                    TMachineFileCallback callback, void *calldata);
+TVMStatus VMDirectoryChange(const char *path){
+    return VM_STATUS_SUCCESS;
+}
 
-MachineFileRead() attempts to read the number of bytes specified in 
-by length into the location specified by data from the file specified 
-by fd. If the datavalue is not a location in the shared memory, 
-MachineFileRead will fail; in addition if length is greater than 512 
-bytes MachineFileRead will also fail. The fdshould have been obtained 
-by a previous call to MachineFileOpen(). The actual number of bytes 
-transferred will be returned in the resultparameter when the 
-callbackfunction is called. Upon failure the resultwill be less 
-than zero.The calldataparameter will also be passed into the 
-callbackfunction upon completion of the read file request. 
-MachineFileRead () should return immediately, but will call the 
-callbackfunction asynchronously when completed.
+// Extra Credit: 
+// TVMStatus VMDirectoryCreate(const char *dirname){
+//     return VM_STATUS_SUCCESS;
+// }
 
----------------------------------------------------------------
+// TVMStatus VMDirectoryUnlink(const char *path){
+//     return VM_STATUS_SUCCESS;
+// }
 
-- voidMachineFileWrite(int fd, void *data, int length, 
-                       TMachineFileCallback callback, void*calldata);
-
-MachineFileWrite() attempts to write the number of bytes specified 
-in by length into the location specified by data to the file specified 
-by fd. If the data value is not a location in the shared memory, 
-MachineFileWrite will fail; in addition if length is greater than 
-512 bytes MachineFileWrite will also fail. The fd should have been 
-obtained by a previous call to MachineFileOpen(). The actual number 
-of bytestransferred will be returned in the resultparameter when the 
-allbackfunction is called. Upon failure the resultwill be less than 
-zero. The calldataparameter will also be passed into the callback 
-function upon completion of the write file request. MachineFileWrite() 
-should return immediately, but will call the callbackfunction 
-asynchronously when completed.
-
-*/
