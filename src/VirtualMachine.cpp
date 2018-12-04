@@ -635,8 +635,9 @@ void ParseFAT(){
     cout << string(root_entries[0].shortName) << "\n";
     cout << "The size os " << root_entries.size();
     int fd;
-    VMFileOpen("LONGTEST.TXT", O_CREAT, 0600, &fd);
     VMFileOpen("OTHER.TXT", O_CREAT, 0600, &fd);
+    VMFileOpen("LONGTEST.TXT", O_CREAT, 0600, &fd);
+    
     
     
 
@@ -696,9 +697,13 @@ void ParseFAT(){
     int h = 1024;
     //Need a system to tell which are system fd's and which are not
     fd = fd + 100;
+    //TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
+    int d;
+    VMFileSeek(fd, 725, 0, &d);
     VMFileRead(fd, buff, &h);
     cout << "RETURNED FROM READ\n";
-    for(int i = 0; i < 1024; i += 16){
+    cout << "h is " << h << "\n";
+    for(int i = 0; i < h; i += 16){
         if (i == 512)
         {
             printf("\n");
@@ -1304,7 +1309,7 @@ TVMStatus MainRead(int filedescriptor, void *data, int *length){
 }
 void offsetIndex(int* cluster, int* sector, int*byte, int fd)
 {
-    cout << "Initial offset is " << root_entries[fd].offset << "\n";
+    cout << "Initial offset is " << root_entries[fd].pointer_offset << "\n";
     int counter = 0;
     int offset = root_entries[fd].pointer_offset;
     int cluster_bytes = sec_per_clus * 512; //Num of bytes per cluster
@@ -1317,10 +1322,12 @@ void offsetIndex(int* cluster, int* sector, int*byte, int fd)
     offset = root_entries[fd].pointer_offset;
     int sectors_occ = offset / 512; //Number of sectors that it takes up
     int bit = offset % 512;
+    /*
     if (bit > 0)
     {
         sectors_occ++;
     }//If there is a remainder then it starts on the next sector
+    */
     *sector = sectors_occ;
     *byte = bit;
 
@@ -1331,10 +1338,11 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
     cout << "In FVMFileRead\n";
     cout << "fd is " << filedescriptor << "\n";
+    //int total_read = 0;
     if (filedescriptor < 3){
     	MainRead(filedescriptor, data, length);
     }
-    
+   
     else{
     	// read from FAT file system
     	// all we have is the file descriptor.
@@ -1352,6 +1360,8 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
         int next;
         
         cout << "About to loop and first is " << current << "\n";
+        int num_bytes = *length;
+        *length = 0;
     	// go to entry in fat table associated with the start cluster
     	// add to data pointer list
     	//FATEntry curr_entry = FAT_Table[start_cluster_ID];
@@ -1362,7 +1372,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     	}
         cout << "Found the end\n";
     	// go through data region with data pointers, read into data 
-        int num_bytes = *length;
+        
     	int num_ptrs = data_pointers.size();
     	int curr_cluster_num;
     	Cluster curr_cluster;
@@ -1370,6 +1380,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
         int cluster_index = 0;
         int sector_index = 0;
         int byte_index = 0;
+        
         //C
         offsetIndex(&cluster_index, &sector_index, &byte_index, filedescriptor);
     	//for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
@@ -1391,9 +1402,12 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
                 }
             }
             cout << "About to start reading\n";
+            cout << "Cluster list is " << data_clusters[i].cluster_data.size() << "\n";
+            
             //for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
             for(int j = sector_index; j < data_clusters[i].cluster_data.size(); j++)
             {
+                cout << "Sector list is " << data_clusters[i].cluster_data[j].Info.size() << "\n";
                 vector<uint8_t> content;
                 int count = 0;
                 //for(int k = 0; (k < (data_clusters[i].cluster_data[j].Info.size())) && (k < 512) && (num_bytes > 0); k++)
@@ -1416,9 +1430,12 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
                     num_bytes --;
                 }
                 cout << "Read a total of " << count << "\n";
+                //total_read += count;
+                *length = *length + count;
                 uint8_t* ptr = content.data();
                 memcpy(data, ptr, count);
                 data = data + count;
+                
             }
 
     		// read data from cluster into data
@@ -1427,6 +1444,7 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
     	}
     	
     }
+    //*length = total_read;
 
 }
 
