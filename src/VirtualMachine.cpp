@@ -324,8 +324,8 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
     cout << "FD IS " <<fat_fd << "\n";
 
     ParseFAT();
-    AddStdinFiles();
-    return VM_STATUS_SUCCESS;
+    //AddStdinFiles();
+    //return VM_STATUS_SUCCESS;
 
     TVMMainEntry vm_main = VMLoadModule(argv[0]);
     
@@ -633,12 +633,10 @@ void ParseFAT(){
     root_begin = (1 + (num_fat * fat_size)) * 512; // changed
     data_begin = root_begin + (root_entry_cnt * 32);
     //TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescriptor)
-    cout << "AFTER IT IS : ";
-    cout << string(root_entries[0].shortName) << "\n";
-    cout << "The size os " << root_entries.size();
+
     int fd;
     VMFileOpen("LONGTEST.TXT", O_CREAT, 0600, &fd);
-    VMFileOpen("OTHER.TXT", O_CREAT, 0600, &fd);
+   // VMFileOpen("OTHER.TXT", O_CREAT, 0600, &fd);
     
     
     
@@ -676,23 +674,6 @@ void ParseFAT(){
 
 
 
-                /*
-                for(int i = 0; i < 512; i += 16){
-                    for(int j = 0; j < 16; j++){
-                        printf("%02X ", cluster_data[i+j]);
-                    }
-                    for(int j = 0; j < 16; j++){
-                        if(isprint(cluster_data[i+j])){
-                            printf("%c",cluster_data[i+j]);
-                        }
-                        else{
-                            printf(".");
-                        }
-                    }
-                    printf("\n");
-                }
-                */
-
             }
         }
     }
@@ -704,13 +685,14 @@ void ParseFAT(){
     int d;
     //Adding this doesn't seem to work???
     //VMFileSeek(fd, 1024, 0, &d);
-    VMFileRead(fd, buff, &h);
-    VMFileSeek(fd, 1024, 0, &d);
+    //VMFileRead(fd, buff, &h);
+    //VMFileSeek(fd, 250, 0, &d);
     cout << "RETURNED FROM READ\n";
     cout << "h is " << h << "\n";
+    /*
     for(int i = 0; i < h; i += 16){
         if (i == 512)
-        {
+        { 
             printf("\n");
         }
         for(int j = 0; j < 16; j++){
@@ -726,13 +708,13 @@ void ParseFAT(){
         }
         printf("\n");
     }
-
+*/
 
     int Length = 23;
     char* b = "I LITERALLY HATE THIS!\n";
     //fd = fd + 100;
     cout << "Before calling it is " << fd << "\n";
-    VMFileWrite(fd ,b,&Length);
+    //VMFileWrite(fd ,b,&Length);
 
     cout << "OMGGGGGGGGGGGGG\n";
    // cout << "The size of the vector is " << data_clusters.size() << "\n";
@@ -760,24 +742,6 @@ void ParseFAT(){
                     printf("\n");
 
 
-
-                /*
-                for(int i = 0; i < 512; i += 16){
-                    for(int j = 0; j < 16; j++){
-                        printf("%02X ", cluster_data[i+j]);
-                    }
-                    for(int j = 0; j < 16; j++){
-                        if(isprint(cluster_data[i+j])){
-                            printf("%c",cluster_data[i+j]);
-                        }
-                        else{
-                            printf(".");
-                        }
-                    }
-                    printf("\n");
-                }
-                */
-
             }
             cout << "\n";
         }
@@ -786,6 +750,7 @@ void ParseFAT(){
     {
         cout << FAT_Table[i].current << " points to " << FAT_Table[i].next << "\n";
     }
+    cout << "Returning\n";
     return;
 }
 
@@ -1023,9 +988,12 @@ TVMStatus VMThreadSleep(TVMTick tick){
 
 int openCluster()
 {
+    cout << "In open cluster\n";
+    cout << "FAT size os " << FAT_Table.size() << "\n";
     for(int i = 0; i < FAT_Table.size(); i++)
     {
-        if (FAT_Table[i].next = 0)
+        cout << "Checking " << FAT_Table[i].next << "\n";
+        if (FAT_Table[i].next == 0)
         {
             return i;
         }
@@ -1063,13 +1031,13 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
         int k = 0;//K is for the name input
         int j = 0;//J is for the one in the root directory
         int count = 0;
-        cout << "We are going to " << string(root_entries[i].shortName) << "\n";
+        //cout << "We are going to " << string(root_entries[i].shortName) << "\n";
         string root_name = string(root_entries[i].shortName);
-        cout << "STRING NOW is " << root_name << "\n";
+        //cout << "STRING NOW is " << root_name << "\n";
         while (k < name.length() && j < 11)
         {
 
-            cout << "Comparing "<< root_name[j] << " and " << name[k] << "\n";
+            //cout << "Comparing "<< root_name[j] << " and " << name[k] << "\n";
             if (root_name[j] == 32)
             {
                 j++;//Do not increment k
@@ -1083,7 +1051,7 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
             }
             if (root_name[j] == name[k])//Skip periods
             {
-                cout << "Equal and count is "<< count << "\n";
+                //cout << "Equal and count is "<< count << "\n";
                 count++;
                 if (count == name.length())//Getting rid of period/extension characters
                 {
@@ -1108,36 +1076,56 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
         SVMDateTime Time;
         New.free = false;
         //New.shortName = new char[11];
+        cout << "The name is " << name << "\n";
         for(int i = 0; i < 11 && i < name.length(); i++)
         {
+            cout << "looping and i is "<< i << "\n";
             New.shortName[i] = name[i];
         }
         New.read_only = false; //???
         New.is_dir = false;
         New.filesize = false;
-        New.first_cluster_number = openCluster();
+        cout << "Getting open\n";
+        
+        int open = openCluster();
+        cout << "We got " << open << "\n";
+        cout << "CUrrent open is " << FAT_Table[open].current << "\n";
+        New.first_cluster_number = FAT_Table[open].current;
+        FAT_Table[open].next = -1;
+
+        cout << "Creating the vector now\n";
+        vector<Sector> Allocated;
+        for(int i = 0; i < sec_per_clus; i++)
+        {
+            Sector Temp;
+            for(int k = 0; k < 512; k++)
+            {
+                Temp.Info.push_back(0);
+            }
+            Allocated.push_back(Temp);
+        }
+        Cluster New_Cluster = {
+            New.first_cluster_number,
+            Allocated,
+            false,
+        };
+        data_clusters.push_back(New_Cluster);
+
         New.dirty = false;
         New.offset = 0;
         New.seek = false;
         New.pointer_offset = 0;
         VMDateTime(&Time);
         index = root_entries.size();
+        *filedescriptor = index + 100;
         root_entries.push_back(New);
-        //Just make a SVMDATETIME for each root entry and parse before copying it back into the FAT image
 
-        //uint16_t creation_date;
-        //uint16_t creation_time;
-        //uint16_t last_modify_date;
-        //uint16_t last_modify_time;
-        //uint16_t last_access_date;
-        // longEntries
-        //Maybe when we open we load al clusters of file into mem
 
     }
 
     int current = root_entries[index].first_cluster_number;
     cout << "USing this one for the calcs: " << string(root_entries[index].shortName) << "\n";
-    *filedescriptor = index;
+    *filedescriptor = index + 100;
     int next;
 
     //uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
@@ -1279,6 +1267,8 @@ TVMStatus VMFileOpen(const char *filename, int flags, int mode, int *filedescrip
     return VM_STATUS_SUCCESS;
 }
 TVMStatus VMFileClose(int filedescriptor){
+
+    return VM_STATUS_SUCCESS;
 
     TMachineSignalStateRef sigset = NULL;
     MachineSuspendSignals(sigset);
@@ -1426,7 +1416,8 @@ TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
         unsigned int next;
 
         //Set the offset to the bottom of the file
-        root_entries[filedescriptor].pointer_offset = root_entries[filedescriptor].filesize;
+        //root_entries[filedescriptor].pointer_offset = root_entries[filedescriptor].filesize;
+        cout << "FILESIZE: " << root_entries[filedescriptor].filesize << "\n";
         
         cout << "About to loop and first is " << current << "\n";
         int num_bytes = *length;
@@ -1573,6 +1564,7 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
         int sector_index = 0;
         int byte_index = 0;
 
+       
         //Check if offset is at end of filesize
         if (left > num_bytes)//No need to allocate new containers
         {
@@ -1613,6 +1605,9 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
                 
                 //for(int j = 0; j < data_clusters[i].cluster_data.size(); j++)
                 int j = sector_index;
+                
+                
+
                 for(; j < data_clusters[i].cluster_data.size(); j++)
                 {
                     cout << "Sector list is " << data_clusters[i].cluster_data[j].Info.size() << "\n";
@@ -1632,6 +1627,7 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
                         cout << "Copying " << (char)B << "\n";
                         data = data + 1;
                         data_clusters[i].cluster_data[j].Info[k] = B;
+                        root_entries[filedescriptor].filesize++;
                        
                         //data_clusters[cluster_copy].cluster_data[sector_copy].Info[byte_copy] = data_clusters[i].cluster_data[j].Info[k];
                        // uint8_t B;
@@ -1659,46 +1655,85 @@ TVMStatus VMFileWrite(int filedescriptor, void *data, int *length){
 
             }
             //Check if after you went through all the clusters there are still bytes to be read
+            /*
             if (num_bytes > 0)
             {
+                cout << "In the other caseeee\n";
+                //return VM_STATUS_SUCCESS;
                 while (num_bytes > 0)
                 {
-
+                    cout << "Hiiiii\n";
                 
                     int open = openCluster();
                     int last = data_pointers[data_pointers.size() - 1];
                     FAT_Table[last].next = open;
                     FAT_Table[open].next = -1;
                     data_pointers.push_back(open); //In case of more iterations
-                    vector<Sector> Extra; //Extra cluster needed
+                    //vector<Sector> Extra; //Extra cluster needed
+                    Cluster new_cluster;
+                    cout << "The size is " << data_clusters.size() << "\n";
+                    int index = data_clusters.size();
+                    data_clusters.push_back(new_cluster);
+                    cout << "Now there are  " << data_clusters.size() << "\n";
+                    
                     for(int i = 0; i < sec_per_clus; i++)
                     {
                         Sector New;
-                        Extra.push_back(New);
+                        //Extra.push_back(New);
+                        data_clusters[index].cluster_data.push_back(New);
                     }
-                    for(int j = 0; j < Extra.size(); j++)
+                    
+                    cout << "This cluster has this sectors " << data_clusters[index].cluster_data.size() << "\n";
+                    //return VM_STATUS_SUCCESS;
+                    //for(int j = 0; j < data_clusters[index].cluster_data.size(); j++)
+                    for(int j = 0; j < sec_per_clus; j++)
                     {
-                        for(int k = 0; k < 512 && num_bytes > 0; k++)
+                        Sector New;
+                        for(int k = 0; k < 512; k++)
                         {
-                            uint8_t B;
-                            memcpy(&B , data, 1);
-                            cout << "Copying " << (char)B << "\n";
-                            data = data + 1;
-                            Extra[j].Info.push_back(B);
-                            num_bytes--;
-                        }
-                    }
+                            if (num_bytes > 0)
+                            {
+                                uint8_t B;
+                                memcpy(&B , data, 1);
+                                cout << "Copying " << (char)B << "\n";
+                                data = data + 1;
+                                //Extra[j].Info.push_back(B);
+                                //data_clusters[index].cluster_data[j].Info.push_back(B);
+                                New.Info.push_back(B);
+                                num_bytes--;
+                                //set pointer offset to wherever this leaves off
 
+                            }
+                            else
+                            {
+                                //cout << "Free\n";
+                                //data_clusters[index].cluster_data[j].Info.push_back(0);
+                                New.Info.push_back(0);
+
+                            }
+                            
+                        }
+                        data_clusters[index].cluster_data.push_back(New);
+                    }
+                    
                     Cluster new_cluster = {
                     open,
                     Extra,
                     false, // may change
                     };
+                    
                     //cout << "CLuster is this: \n";
                     //cout << (char*)cluster_data << "\n";
-                    data_clusters.push_back(new_cluster);
+
+                    //data_clusters.push_back(new_cluster);
+                    for(int i = 0; i < sec_per_clus; i++)
+                    {
+                        
+                        cout << "This sectors has " << data_clusters[index].cluster_data[i].Info.size();
+                    }
                 }
             }
+            */
 
             cout << "We wrotttte " << copy_count << "\n";
             cout << "We were given " << *length << "\n";
@@ -1855,6 +1890,7 @@ TVMStatus VMFileSeek(int filedescriptor, int offset, int whence, int *newoffset)
         }
         else
         {
+            cout << "Setting the offset at " << whence + offset << "\n";
             root_entries[filedescriptor].pointer_offset = whence + offset;
             root_entries[filedescriptor].seek = true;
             *newoffset = whence + offset;
