@@ -34,12 +34,13 @@ void VMFileWriteCallback(void *calldata, int result);
 void VMFileOpenCallback(void *calldata, int result);
 void infiniteLoop(void *param);
 void ParseFAT();
+void ParseDateTimeTest();
+void ParseDateTime(SVMDateTimeRef datetime_ref, unsigned short date, unsigned short time, unsigned int hundredth);
 void AddStdinFiles();
 TVMStatus MainRead(int filedescriptor, void *data, int *length);
 void VMCallback(void *calldata, int result);
 void VMModCallback(void *calldata, int result);
 bool Allocate(TVMMemoryPoolID pool_index, TVMMemorySize size, void **pointer);
-
  struct ThreadControlBlock;
  struct MutexControlBlock;
 
@@ -100,9 +101,8 @@ const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
 //Project 4:
  struct Sector
  {
- 	vector<uint8_t> Info;
+    // vector<uint8_t> Info;
     uint8_t *Info;
-
     // int sectorID;
  };
  struct FATEntry 
@@ -110,21 +110,22 @@ const TVMMemoryPoolID VM_MEMORY_POOL_ID_SYSTEM = 1;
     uint16_t current;
     uint16_t next;
 };
-struct DirEntry
+struct RootEntry
 {
     bool free;
-    char *shortName; // offset 0, bytes 11
+    char shortName[VM_FILE_SYSTEM_SFN_SIZE];
+    char longName[VM_FILE_SYSTEM_MAX_PATH]; // offset 0, bytes 11
     bool read_only;
     bool is_dir;
-    int filesize;
+    unsigned char attributes;
+    unsigned int filesize;
     uint16_t first_cluster_number;
     bool dirty;
     int offset;
-    uint16_t creation_date;
-    uint16_t creation_time;
-    uint16_t last_modify_date;
-    uint16_t last_modify_time;
-    uint16_t last_access_date;
+    SVMDateTime create_datetime; 
+    SVMDateTime access_datetime; 
+    SVMDateTime modify_datetime;
+
     // longEntries
 
 };
@@ -142,10 +143,10 @@ struct Cluster
 
 struct File
 {
-	int fileID;
+    int fileID;
     int start_cluster_ID;
     // int dir_cluster_ID;
-    vector<string> abs_path;
+    string abs_path;
     int size;
     // creation_date;
     // last_modified;
@@ -153,12 +154,14 @@ struct File
     // dirty bit
     // RD_only
 };
-struct Directory = {
-	int directoryID, 
-	vector<string> abs_path;
-	vector<Directory> dir_path;
-	int start_cluster_ID;
-	vector<DirEntry> entries;
+struct Directory {
+    int directoryID;
+    string abs_path;
+    vector<Directory> dir_path;
+    int start_cluster_ID;
+    vector<RootEntry> entries;
+    bool open;
+    int curr_read_entry;
 };
 
 vector<Directory> dir_list;
@@ -189,12 +192,13 @@ int fat_begin;
 int root_begin;
 int data_begin;
 
-vector<string> cwd; 
+// vector<string> cwd; 
+string cwd;
 int cwd_offset;
 File curr_dir;
 
 vector<FATEntry> FAT_Table;
-vector<DirEntry> root_entries;
+vector<RootEntry> root_entries;
 vector<Cluster> data_clusters;
 vector<File> files_list;
 
@@ -329,20 +333,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
 
     ParseFAT();
     AddStdinFiles();
-    vector<string> root_path;
-    root_path.append("/");
-    cwd.push_back("/"); // add root directory
-    cwd = root_begin;
-
-    vector<Directory> root_dir_vec;
-    Directory root = {
-    	0,
-    	cwd,
-    	root_dir_vec,
-    	0, // may change 
-    }
-    dir_list.push_back(root);
-  	
+    
 
     // return VM_STATUS_SUCCESS;
 
@@ -352,6 +343,7 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
         return VM_STATUS_FAILURE;
     }
     
+
     vm_main(argc, argv);
 
     // cout << "YO WE ARE HERE BACK\n";
@@ -370,30 +362,30 @@ TVMStatus VMStart(int tickms, TVMMemorySize heapsize,TVMMemorySize sharedsize, c
 // void OpenFAT();
 
 void AddStdinFiles(){
-	File stdin_file = {
-		0,
-	    0,
-	    "0",
-	    0,
-	};
+    File stdin_file = {
+        0,
+        0,
+        "0",
+        0,
+    };
 
-	File stdout_file = {
-		1, 
-		1, 
-		"1",
-		1,
-	};
+    File stdout_file = {
+        1, 
+        1, 
+        "1",
+        1,
+    };
 
-	File stderror_file = {
-		2, 
-		2, 
-		"2", 
-		2,
-	};
-	files_list.push_back(stdin_file);
-	files_list.push_back(stdout_file);
-	files_list.push_back(stderror_file);
-	return;
+    File stderror_file = {
+        2, 
+        2, 
+        "2", 
+        2,
+    };
+    files_list.push_back(stdin_file);
+    files_list.push_back(stdout_file);
+    files_list.push_back(stderror_file);
+    return;
 }
 
 void ParseFAT(){
@@ -411,7 +403,7 @@ void ParseFAT(){
     memcpy(&root_entry_cnt, &Buffer[17], 2);
     memcpy(&num_total_sectors, &Buffer[19], 2);
     if (num_total_sectors == 0){
-    	memcpy(&num_total_sectors, &Buffer[32], 4);
+        memcpy(&num_total_sectors, &Buffer[32], 4);
     }
 
     //update globals
@@ -447,11 +439,11 @@ void ParseFAT(){
         entry.current = count;
         entry.next = temp;
         FAT_Table.push_back(entry);
-        cout << temp << "\n";
+        // cout << temp << "\n";
         i+= 2;
         count +=1;
     }
-    cout << "FAT size is " << fat_size << "\n";
+    // cout << "FAT size is " << fat_size << "\n";
 
     int next_start = (512 * fat_size) * 2;//Skip over the 2 fat tables
 
@@ -477,7 +469,6 @@ void ParseFAT(){
 
     // Parse Root Dir
     
-    uint8_t *shortName = new uint8_t[11];
     // uint8_t *shortName = (uint8_t *) malloc(sizeof(uint8_t) * 11);
     bool free;
     bool is_dir;
@@ -491,11 +482,12 @@ void ParseFAT(){
     // short creation_time;
     // short write_date;
     // short write_time;
-    uint16_t creation_date;
-    uint16_t creation_time;
-    uint16_t last_modify_date;
-    uint16_t last_modify_time;
-    uint16_t last_access_date;
+    unsigned short creation_date;
+    unsigned short creation_time;
+    unsigned short last_modify_date;
+    unsigned short last_modify_time;
+    unsigned short last_access_date;
+    uint8_t create_time_hundredth;
 
     //update globals
     root_begin = (1 + num_fat * fat_size) * 512; // changed
@@ -512,35 +504,44 @@ void ParseFAT(){
     int root_count = 0;
     bool long_entry = true;
     while (root_count < root_entry_cnt){
+        char shortName[VM_FILE_SYSTEM_SFN_SIZE];
+        char longName[VM_FILE_SYSTEM_MAX_PATH];
         memcpy(shortName, &data[parse_root_begin + k], 11);
         memcpy(&attribute, &data[parse_root_begin + k + 11], 1);
 /*
         if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
-        	short_entry_offset += 32; 
-    		continue;
+            short_entry_offset += 32; 
+            continue;
         }
-*/     	
+*/      
+        
         if (long_entry == true)
         {
-        	if (shortName[0] & 0x40)
-        	{
-        		long_entry = false;
-        	 	k+=32;
-        		root_count+=1;
-        		continue;
-        	}
-        	else
-        	{
-        		//ong_entry = false;
-        	 	k+=32;
-        		root_count+=1;
-        		continue;
+            if (shortName[0] & 0x40) // if bit 6 is set
+            {
+                long_entry = false; 
 
-        	}
-        	
+                k+=32;
+                root_count+=1;
+                // cout << "name: " << (char *)shortName << "\n";
+                // cout << "end\n";
+                continue;
+            }
+            else
+            {
+                //ong_entry = false;
+                k+=32;
+                root_count+=1;
+                // cout << "name: " << (char *)shortName << "\n";
+                // cout << "hi\n";
+                continue;
+
+            }
+            
         }
+        cout << "name: " << (char *)shortName << "\n";
 
-		// char name[11];
+        // char name[11];
         if (shortName[0] == 0x00){
             free = true;
             break; 
@@ -548,18 +549,18 @@ void ParseFAT(){
         else{
             free = false;
          //    char * new_name = new char [11];
-        	// memcpy(new_name, shortName, 11);
-        	cout << "name: " << (char *)shortName << "\n";
-        	
+            // memcpy(new_name, shortName, 11);
 
-            for (int i = 0; i < 11; i++){
-            	cout << "letter: " << shortName[i] << "\n";
-            }
+            
+
+            // for (int i = 0; i < 11; i++){
+            //     cout << "letter: " << shortName[i] << "\n";
+            // }
             // for (int l = 0; l < 11; l++){
 
-            // 	memcpy(&name[l], &shortName[l], 1);
-            // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
-            // 	// cout << "ascii: " << (int) shortName[l] << "\n";
+            //  memcpy(&name[l], &shortName[l], 1);
+            //  // cout << "name[" << l << "]: " << shortName[l] << "\n";
+            //  // cout << "ascii: " << (int) shortName[l] << "\n";
             // }
            // cout << "name: " << shortName << "\n";
             
@@ -577,52 +578,79 @@ void ParseFAT(){
         memcpy(&last_modify_date, &data[parse_root_begin + k + 24], 2);
         memcpy(&last_modify_time, &data[parse_root_begin + k + 22], 2);
         memcpy(&last_access_date, &data[parse_root_begin + k + 18], 2);
+        memcpy(&create_time_hundredth, &data[parse_root_begin + k + 13], 1);
+        
+        SVMDateTime create_datetime;
+        SVMDateTime access_datetime;
+        SVMDateTime modify_datetime;
 
+        unsigned int create_hundredth = (unsigned int)create_time_hundredth;
+        ParseDateTime(&create_datetime, creation_date, creation_time, create_hundredth);
+        ParseDateTime(&access_datetime, last_access_date, last_modify_time, 0);
+        ParseDateTime(&modify_datetime, last_modify_date, last_modify_time, 0);
 
         // if (!free){
-        	// cout << "shortName: " << shortName << "\n";
-        	// cout << "filesize: " << filesize << "\n";
-        	// if (is_dir){
-        	// 	cout << "is_dir: true\n";
-        	// }
-        	// else{
-        	// 	cout << "is_dir: false\n";
-        	// }
-        	// cout << "first_cluster_number: " << first_cluster_number << "\n";
-        	// cout << "creation date: " << creation_date << "\n";
-        	// cout << "creation time: " << creation_time << "\n";
-        	// cout << "last_modify_date: " << last_modify_date << "\n";
-        	// cout << "last_modify_time: " << last_modify_time << "\n";
-        	// cout << "last access date: " << last_access_date << "\n";
-        	
+            // cout << "shortName: " << shortName << "\n";
+            // cout << "filesize: " << filesize << "\n";
+            // if (is_dir){
+            //  cout << "is_dir: true\n";
+            // }
+            // else{
+            //  cout << "is_dir: false\n";
+            // }
+            // cout << "first_cluster_number: " << first_cluster_number << "\n";
+            // cout << "creation date: " << creation_date << "\n";
+            // cout << "creation time: " << creation_time << "\n";
+            // cout << "last_modify_date: " << last_modify_date << "\n";
+            // cout << "last_modify_time: " << last_modify_time << "\n";
+            // cout << "last access date: " << last_access_date << "\n";
+            
         // }
 
         dirty = false; // TODO: may need to change
 
-        DirEntry new_root_entry = {
-            free,
-            (char *)shortName,
-            read_only,
-            is_dir,
-            filesize,
-            first_cluster_number,
-            dirty,
-            k, 
-            creation_date, 
-   			creation_time, 
-		    last_modify_date,
-		    last_modify_time,
-		    last_access_date,
+        // RootEntry new_root_entry = {
+        //     free,
+        //     shortName,
+        //     longName,
+        //     read_only,
+        //     is_dir,
+        //     attribute,
+        //     filesize,
+        //     first_cluster_number,
+        //     dirty,
+        //     k, 
+        //     create_datetime, 
+        //     access_datetime,
+        //     modify_datetime,
+        //     // bool free;
+        //     // char *shortName; // offset 0, bytes 11
+        //     // bool read_only;
+        //     // bool is_dir;
+        //     // int filesize;
+        //     // short first_cluster_number;
+        //     // uint8_t dirty;
+        //     // int offset;
+        // };
 
-            // bool free;
-            // char *shortName; // offset 0, bytes 11
-            // bool read_only;
-            // bool is_dir;
-            // int filesize;
-            // short first_cluster_number;
-            // uint8_t dirty;
-            // int offset;
-        };
+        RootEntry new_root_entry;
+
+        memcpy(longName, new_root_entry.longName, 256);
+        memcpy(longName, new_root_entry.shortName, 13);
+        new_root_entry.free = free;
+        // new_root_entry.shortName = shortName;
+        // new_root_entry.longName = longName;
+        new_root_entry.read_only = read_only,
+        new_root_entry.is_dir = is_dir;
+        new_root_entry.attributes = attribute;
+        new_root_entry.filesize = filesize;
+        new_root_entry.first_cluster_number = first_cluster_number;
+        new_root_entry.dirty = dirty;
+        new_root_entry.offset = k;
+        new_root_entry.create_datetime = create_datetime;
+        new_root_entry.access_datetime = access_datetime;
+        new_root_entry.modify_datetime = modify_datetime;
+
 
 
         root_entries.push_back(new_root_entry);
@@ -633,27 +661,32 @@ void ParseFAT(){
 
     }
 
-    dir_list[0].entries.push_back(root_entries);
+    // cout << "hi\n";
+    cwd.push_back('/'); // add root directory
+    cwd.push_back('\0');
 
+    // char *hello = new char[5];
+    // VMDirectoryCurrent(hello);
+
+    // cout << "after call: " << hello << "\n";
 
     // Parse Data ?
     
-    // root directory is dir_list
-    DirEntry curr_entry;
-    // add to the entries field of the root directory
 
-    vector<string> path_name;
-    string root_name ("/");
-    path_name.push_back(root_name);
+    // DirEntry curr_entry;
 
-    for (int root_index = 0; root_index < root_entry_cnt; root_index++){
-    	curr_entry = root_entries[root_index];
-    	dir_list[0].entries.push_back(curr_entry);
-    	if (curr_entry.is_dir){
-    		RecurseDirectories(curr_entry, root_name);
-    	}
-    	
-    }	
+    // vector<string> path_name;
+    // string root_name ("/");
+    // path_name.push_back(root_name);
+
+    // for (int root_index = 0; root_index < root_entry_cnt; root_index++){
+    //  curr_entry = root_entries[root_index];
+    //  dir_list[0].entries.push_back(curr_entry);
+    //  if (curr_entry.is_dir){
+    //      RecurseDirectories(curr_entry, root_name);
+    //  }
+        
+    // }    
 
     // go through the subdirectories
 
@@ -661,44 +694,85 @@ void ParseFAT(){
 
     // int clusterID = 0;
     // for (int data_index = data_begin; data_index < num_total_sectors * 512; data_index += sec_per_clus * 512){
-    // 	uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
-    // 	memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
-    // 	Cluster new_cluster = {
-    // 		clusterID,
-    // 		cluster_data,
-    // 		false, // may change
-    // 	};
-    // 	data_clusters.push_back(new_cluster);
-    // 	clusterID++;
+    //  uint8_t *cluster_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+    //  memcpy(cluster_data, &data[data_begin + data_index], sec_per_clus * 512); // changed from &clusterdata to clusterdata
+    //  Cluster new_cluster = {
+    //      clusterID,
+    //      cluster_data,
+    //      false, // may change
+    //  };
+    //  data_clusters.push_back(new_cluster);
+    //  clusterID++;
     // }
     
     return;
 }
 
+void ParseDateTimeTest(){
+    unsigned short date = (unsigned short) 0b0000100100001101;
+    unsigned short time = (unsigned short) 0b0000100011100001;
+
+    SVMDateTime datetime;
+    ParseDateTime(&datetime, date, time, 0);
+    printf("%04d/%02d/%02d", datetime.DYear, datetime.DMonth, datetime.DDay);
+
+    return;
+}
+void ParseDateTime(SVMDateTimeRef datetime_ref, unsigned short date, unsigned short time, unsigned int hundredth){
+    // parse the date into month, day, year
+    unsigned int year;
+    unsigned char month;
+    unsigned char day;
+    year = (unsigned int) (date & 0b1111111);
+    month = (unsigned char) ((date >> 7) & 0b1111);
+    day = (unsigned char) ((date >> 11) & 0b11111);
+
+    // parse the time into hour, minute, second, hundredth
+    unsigned char hour;
+    unsigned char minute;
+    unsigned char second;
+    unsigned char hundred;
+
+    hour = (unsigned char) (time & 0b11111);
+    minute = (unsigned char) ((time >> 6) & 0b111111);
+    second = (unsigned char) ((time >> 11) & 0b11111);
+
+    datetime_ref->DYear = year;
+    datetime_ref->DMonth = month;
+    datetime_ref->DDay = day;
+    datetime_ref->DHour = hour;
+    datetime_ref->DMinute = minute;
+    datetime_ref->DSecond = second;
+    datetime_ref->DHundredth = (unsigned char) hundred;
+
+}
+
+/*
+
 void RecurseDirectories(DirEntry curr_entry, vector<string> path_name){
-	string filename(curr_entry.shortName);
-	int dirID = dir_list.size();
+    string filename(curr_entry.shortName);
+    int dirID = dir_list.size();
     
-	vector<int> data_pointers;
+    vector<int> data_pointers;
 
-	FatEntry curr_fat = FAT_Table[first_cluster_number];
+    FATEntry curr_fat = FAT_Table[first_cluster_number];
 
-	while (curr_entry.current < 0xFFF8){
-		data_pointers.push_back(curr_fat.current);
-		curr_fat = Fat_Table[curr_fat.next];
-	}
+    while (curr_entry.current < 0xFFF8){
+        data_pointers.push_back(curr_fat.current);
+        curr_fat = FAT_Table[curr_fat.next];
+    }
 
-	int num_data_pointers = data_pointers.size(); // also equals to the number of clusters
-	// int num_bytes_in_dir = num_data_pointers * sec_per_clus * 512;
-	int bytes_per_clus = 512 * sec_per_clus;
-	int curr_ptr;
-	int actual_cluster_num;
-	int cluster_byte_offset;
-	int new_offset;
-	int length;
-	int num_entries = bytes_per_clus / 32; // ?
+    int num_data_pointers = data_pointers.size(); // also equals to the number of clusters
+    // int num_bytes_in_dir = num_data_pointers * sec_per_clus * 512;
+    int bytes_per_clus = 512 * sec_per_clus;
+    int curr_ptr;
+    int actual_cluster_num;
+    int cluster_byte_offset;
+    int new_offset;
+    int length;
+    int num_entries = bytes_per_clus / 32; // ?
 
-	bool free;
+    bool free;
     bool is_dir;
     bool read_only;
     int filesize;
@@ -714,157 +788,159 @@ void RecurseDirectories(DirEntry curr_entry, vector<string> path_name){
 
     vector<DirEntry> dir_entries;
 
-	for(int i = 0; i < num_data_pointers; i++){
-		uint8_t *dir_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
-		curr_ptr = data_pointers[i];
-		actual_cluster_num = curr_ptr - 2;
-		cluster_byte_offset = data_begin + actual_cluster_num * bytes_per_clus; // bytes past beginning of image
-		VMFileSeek(fat_fd, cluster_byte_offset, 0, &new_offset);
-		length = bytes_per_clus;
-		MainRead(fat_fd, dir_data, &length);
+    bool done;
+    bool long_entry;
+    for(int i = 0; i < num_data_pointers; i++){
+        uint8_t *dir_data = (uint8_t *) malloc(sizeof(uint8_t) * sec_per_clus * 512);
+        curr_ptr = data_pointers[i];
+        actual_cluster_num = curr_ptr - 2;
+        cluster_byte_offset = data_begin + actual_cluster_num * bytes_per_clus; // bytes past beginning of image
+        VMFileSeek(fat_fd, cluster_byte_offset, 0, &new_offset);
+        length = bytes_per_clus;
+        MainRead(fat_fd, dir_data, &length);
 
-		// with current cluster, read 32-bit entries
-		// for (int j = 0; j < num_entries; j++){
+        // with current cluster, read 32-bit entries
+        // for (int j = 0; j < num_entries; j++){
 
-		// }
-		done = false;
-		
-		DirEntry newEntry; 
-		
-		long_entry = false;
+        // }
+        done = false;
+        
+        DirEntry newEntry; 
+        
+        long_entry = false;
 
-		for(int i = 0; (!done) ; i+= 32){
-			// uint8_t *shortName = new uint8_t[11];
-			// memcpy(shortName, &dir_data[i], 11);
+        for(int i = 0; i < root_entry_cnt ; i+= 32){
+            // uint8_t *shortName = new uint8_t[11];
+            // memcpy(shortName, &dir_data[i], 11);
 
-			// if (shortName[0] == 0xE00){
-			// 	free = true;
-			// }
-			// else{
-			// 	free = false;
+            // if (shortName[0] == 0xE00){
+            //  free = true;
+            // }
+            // else{
+            //  free = false;
 
-			// }
+            // }
 
-			// memcpy(&read_nly)
-			uint8_t *shortName = new uint8_t[11];
+            // memcpy(&read_nly)
+            uint8_t *shortName = new uint8_t[11];
 
-			memcpy(shortName, &dir_data[i], 11);
-	/*
-	        if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
-	        	short_entry_offset += 32; 
-	    		continue;
-	        }
-	*/     	
-	        if (long_entry == true)
-	        {
-	        	if (shortName[0] & 0x40)
-	        	{
-	        		long_entry = false;
-	        	 	k+=32;
-	        		root_count+=1;
-	        		continue;
-	        	}
-	        	else
-	        	{
-	        		//ong_entry = false;
-	        	 	k+=32;
-	        		root_count+=1;
-	        		continue;
+            memcpy(shortName, &dir_data[i], 11);
+    /*
+            if (attribute && 0x01 | attribute && 0x02 | attribute && 0x04 | attribute && 0x08){
+                short_entry_offset += 32; 
+                continue;
+            }
+        *
+            if (long_entry == true)
+            {
+                if (shortName[0] & 0x40)
+                {
+                    long_entry = false;
+                    k+=32;
+                    // root_count+=1;
+                    continue;
+                }
+                else
+                {
+                    //ong_entry = false;
+                    k+=32;
+                    // root_count+=1;
+                    continue;
 
-	        	}
-	        	
-	        }
+                }
+                
+            }
 
-			// char name[11];
-	        if (shortName[0] == 0x00){
-	            free = true;
-	            break;
-	        }
-	        else{
-	            free = false;
-	         //    char * new_name = new char [11];
-	        	// memcpy(new_name, shortName, 11);
-	        	cout << "name: " << (char *)shortName << "\n";
-	        	
+            // char name[11];
+            if (shortName[0] == 0x00){
+                free = true;
+                break;
+            }
+            else{
+                free = false;
+             //    char * new_name = new char [11];
+                // memcpy(new_name, shortName, 11);
+                cout << "name: " << (char *)shortName << "\n";
+                
 
-	            for (int i = 0; i < 11; i++){
-	            	cout << "letter: " << shortName[i] << "\n";
-	            }
-	            // for (int l = 0; l < 11; l++){
+                for (int i = 0; i < 11; i++){
+                    cout << "letter: " << shortName[i] << "\n";
+                }
+                // for (int l = 0; l < 11; l++){
 
-	            // 	memcpy(&name[l], &shortName[l], 1);
-	            // 	// cout << "name[" << l << "]: " << shortName[l] << "\n";
-	            // 	// cout << "ascii: " << (int) shortName[l] << "\n";
-	            // }
-	           // cout << "name: " << shortName << "\n";
-	            
-	        }
+                //  memcpy(&name[l], &shortName[l], 1);
+                //  // cout << "name[" << l << "]: " << shortName[l] << "\n";
+                //  // cout << "ascii: " << (int) shortName[l] << "\n";
+                // }
+               // cout << "name: " << shortName << "\n";
+                
+            }
 
-	        
+            
 
-	        memcpy(&attribute, &data[i + 11], 1);
-	        read_only = attribute && 0x1;
-	        is_dir = attribute && 0x10;
-	        memcpy(&filesize, &data[i + 28], 4);
-	        memcpy(&first_cluster_number, &data[i + 26], 2);
-	        memcpy(&creation_date, &data[i + 16], 2);
-	        memcpy(&creation_time, &data[i + 14], 2);
-	        memcpy(&last_modify_date, &data[i + 24], 2);
-	        memcpy(&last_modify_time, &data[i + 22], 2);
-	        memcpy(&last_access_date, &data[i + 18], 2);
+            memcpy(&attribute, &data[i + 11], 1);
+            read_only = attribute && 0x1;
+            is_dir = attribute && 0x10;
+            memcpy(&filesize, &data[i + 28], 4);
+            memcpy(&first_cluster_number, &data[i + 26], 2);
+            memcpy(&creation_date, &data[i + 16], 2);
+            memcpy(&creation_time, &data[i + 14], 2);
+            memcpy(&last_modify_date, &data[i + 24], 2);
+            memcpy(&last_modify_time, &data[i + 22], 2);
+            memcpy(&last_access_date, &data[i + 18], 2);
 
 
-	        // if (!free){
-	        	// cout << "shortName: " << shortName << "\n";
-	        	// cout << "filesize: " << filesize << "\n";
-	        	// if (is_dir){
-	        	// 	cout << "is_dir: true\n";
-	        	// }
-	        	// else{
-	        	// 	cout << "is_dir: false\n";
-	        	// }
-	        	// cout << "first_cluster_number: " << first_cluster_number << "\n";
-	        	// cout << "creation date: " << creation_date << "\n";
-	        	// cout << "creation time: " << creation_time << "\n";
-	        	// cout << "last_modify_date: " << last_modify_date << "\n";
-	        	// cout << "last_modify_time: " << last_modify_time << "\n";
-	        	// cout << "last access date: " << last_access_date << "\n";
-	        	
-	        // }
+            // if (!free){
+                // cout << "shortName: " << shortName << "\n";
+                // cout << "filesize: " << filesize << "\n";
+                // if (is_dir){
+                //  cout << "is_dir: true\n";
+                // }
+                // else{
+                //  cout << "is_dir: false\n";
+                // }
+                // cout << "first_cluster_number: " << first_cluster_number << "\n";
+                // cout << "creation date: " << creation_date << "\n";
+                // cout << "creation time: " << creation_time << "\n";
+                // cout << "last_modify_date: " << last_modify_date << "\n";
+                // cout << "last_modify_time: " << last_modify_time << "\n";
+                // cout << "last access date: " << last_access_date << "\n";
+                
+            // }
 
-	        dirty = false; // TODO: may need to change
+            dirty = false; // TODO: may need to change
 
-	        DirEntry new_entry = {
-	            free,
-	            (char *)shortName,
-	            read_only,
-	            is_dir,
-	            filesize,
-	            first_cluster_number,
-	            dirty,
-	            k, 
-	            creation_date, 
-	   			creation_time, 
-			    last_modify_date,
-			    last_modify_time,
-			    last_access_date,
+            DirEntry new_entry = {
+                free,
+                (char *)shortName,
+                read_only,
+                is_dir,
+                filesize,
+                first_cluster_number,
+                dirty,
+                i, 
+                creation_date, 
+                creation_time, 
+                last_modify_date,
+                last_modify_time,
+                last_access_date,
 
-			}
+            }
 
-			dir_entries.push_back(new_entry);
-		}
+            dir_entries.push_back(new_entry);
+        }
 
-	}		
+    }       
 
     vector<string> add_to_path = path_name.push_back(filename);
-	Directory new_dir = {
-		dirID,
-		add_to_path,
-		curr_entry.start_cluster_ID,
-		dir_entries,
-	}
+    Directory new_dir = {
+        dirID,
+        add_to_path,
+        curr_entry.start_cluster_ID,
+        dir_entries,
+    }
 
-	dir_list.push_back(new_dir);
+    dir_list.push_back(new_dir);
 
     int num_dir_entries = dir_entries.size();
     for (int dir_index = 0; dir_index < num_dir_entries; dir_index++){
@@ -873,6 +949,8 @@ void RecurseDirectories(DirEntry curr_entry, vector<string> path_name){
         }
     }
 }
+
+*/
 
 
 TVMStatus VMTickMS(int *tickmsref){
@@ -1142,7 +1220,7 @@ TVMStatus VMFileClose(int filedescriptor){
 }   
 
 TVMStatus MainRead(int filedescriptor, void *data, int *length){
-	cout << "in vmfileread\n";
+    cout << "in vmfileread\n";
     if (data == NULL || length == NULL)
     {
         return VM_STATUS_ERROR_INVALID_PARAMETER;
@@ -1221,59 +1299,59 @@ TVMStatus MainRead(int filedescriptor, void *data, int *length){
     
     MachineResumeSignals(sigset);
 
-	return VM_STATUS_SUCCESS;
+    return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMFileRead(int filedescriptor, void *data, int *length){
 
     if (filedescriptor < 3){
-    	MainRead(filedescriptor, data, length);
+        MainRead(filedescriptor, data, length);
     }
     else{
-    	// read from FAT file system
-    	// all we have is the file descriptor.
-    	// File : fileID is same as fd, start cluster number, use this to go to the correct first FAT
-    	// then iterate through FAT to find next, go through storing pntrs
-    	// then go through data clusters, reading all into data
+        // read from FAT file system
+        // all we have is the file descriptor.
+        // File : fileID is same as fd, start cluster number, use this to go to the correct first FAT
+        // then iterate through FAT to find next, go through storing pntrs
+        // then go through data clusters, reading all into data
 
-    	TMachineSignalStateRef sigset = NULL;
-   		MachineSuspendSignals(sigset);
+        TMachineSignalStateRef sigset = NULL;
+        MachineSuspendSignals(sigset);
 
-    	vector<int> data_pointers;
+        vector<int> data_pointers;
 
-    	// get start cluster from fd:
-    	File read_file = files_list[filedescriptor];
-    	int start_cluster_ID = read_file.start_cluster_ID;
+        // get start cluster from fd:
+        File read_file = files_list[filedescriptor];
+        int start_cluster_ID = read_file.start_cluster_ID;
 
-    	// go to entry in fat table associated with the start cluster
-    	// add to data pointer list
-    	FATEntry curr_entry = FAT_Table[start_cluster_ID];
-    	while(curr_entry.current < 0xFFF8){ // not EOC, see pg. 17 fatgen103
-    		data_pointers.push_back(curr_entry.current);
-    		curr_entry = FAT_Table[curr_entry.next];
-    	}
+        // go to entry in fat table associated with the start cluster
+        // add to data pointer list
+        FATEntry curr_entry = FAT_Table[start_cluster_ID];
+        while(curr_entry.current < 0xFFF8){ // not EOC, see pg. 17 fatgen103
+            data_pointers.push_back(curr_entry.current);
+            curr_entry = FAT_Table[curr_entry.next];
+        }
 
-    	// go through data region with data pointers, read into data 
-    	int num_ptrs = data_pointers.size();
-    	int curr_cluster_num;
-    	Cluster curr_cluster;
-    	for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
-    		// find data cluster
-    		curr_cluster_num = data_pointers[ptr_index];
-    		for(int i = 0; i < data_clusters.size(); i++){
-    			if (data_clusters[i].clusterID == curr_cluster_num){
-    				curr_cluster = data_clusters[i];
-    			}
-    		}
-    		
-    		// TODO: change to put data into a vector of sectors
-    		memcpy(data, curr_cluster.cluster_data, 512);
-    		data = data + 512;
-    	}
-    	// *length = length;
-    	MachineResumeSignals(sigset);
-    	return VM_STATUS_SUCCESS
-    	
+        // go through data region with data pointers, read into data 
+        int num_ptrs = data_pointers.size();
+        int curr_cluster_num;
+        Cluster curr_cluster;
+        for(int ptr_index = 0; ptr_index < num_ptrs; ptr_index++){
+            // find data cluster
+            curr_cluster_num = data_pointers[ptr_index];
+            for(int i = 0; i < data_clusters.size(); i++){
+                if (data_clusters[i].clusterID == curr_cluster_num){
+                    curr_cluster = data_clusters[i];
+                }
+            }
+            
+            // TODO: change to put data into a vector of sectors
+            memcpy(data, curr_cluster.cluster_data[ptr_index].Info, 512); //?
+            data = data + 512;
+        }
+        // *length = length;
+        MachineResumeSignals(sigset);
+        return VM_STATUS_SUCCESS;
+        
     }
 
 }
@@ -2099,56 +2177,233 @@ TVMStatus VMMutexRelease(TVMMutexID mutex){ // should disable signals before cal
 }
 
 TVMStatus VMDirectoryOpen(const char *dirname, int *dirdescriptor){
-	// iterate through files, 
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
+    // iterate through files, 
+    if (dir_list.size() >= 1){ // already created
+        MachineResumeSignals(sigset);
+        return VM_STATUS_FAILURE; // should only have root directory 
+    }
+    cout << "opening directory with dirname " << dirname << "\n";
+    string str_dirname(dirname);
+    int str_dirname_size = str_dirname.size();
+    char *abs_path = (char *) malloc (sizeof(char) * (cwd.size() + str_dirname_size + 1));
+    if (VM_STATUS_SUCCESS == VMFileSystemGetAbsolutePath(abs_path, cwd.c_str(), dirname)){
+        if (abs_path != "/"){
+            cout << "path isn't /\n";
+            MachineResumeSignals(sigset);
+            return VM_STATUS_FAILURE;
+        }
+        else{
+            cout << "path is /";
+            // vector<string> root_path;
+            // root_path.append("/");
+    
+            // cwd = root_begin;
+            // change to be more generic if doing extra credit
+            vector<Directory> root_dir_vec;
+            Directory root = {
+                0,
+                cwd,
+                root_dir_vec,
+                0, // may change 
+                root_entries,
+                false,
+                0,
+            };
 
+            *dirdescriptor = 0;
 
+            dir_list.push_back(root);
+        }
+    }   
+    else{
+        cout << "problem resolving path\n";
+        MachineResumeSignals(sigset);
+        return VM_STATUS_FAILURE;
+    }
 
+    MachineResumeSignals(sigset);
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryClose(int dirdescriptor){
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
 
+    int dir_size = dir_list.size();
+    if (dirdescriptor >= dir_size){
+        return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    Directory curr_directory = dir_list[dirdescriptor];
+    int curr_entry_index = curr_directory.curr_read_entry;
+    
+    dir_list[dirdescriptor].open = false;
+
+    MachineResumeSignals(sigset);
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryRead(int dirdescriptor, SVMDirectoryEntryRef dirent){
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
+    cout << "calling vm directory read\n";
+
+    //TODO check if there is nothing left to read
+    int dir_size = dir_list.size();
+    if (dirdescriptor >= dir_size){
+        cout << "not a valid dirdescriptor\n";
+        return VM_STATUS_ERROR_INVALID_ID;
+    }
+    Directory curr_directory = dir_list[dirdescriptor];
+    int curr_entry_index = curr_directory.curr_read_entry;
+    vector<RootEntry> entries = curr_directory.entries;
+    RootEntry curr_entry = entries[curr_entry_index];
+    if (curr_entry_index >= entries.size()){
+        cout << "nothing left to read\n";
+        return VM_STATUS_FAILURE; 
+    }
+    if (!curr_directory.open){
+        cout << "failed b/c trying to read before opening directory";
+        return VM_STATUS_FAILURE;
+    }
+
+    // char short_char_array[13];
+    // char long_char_array[256];
+    // string short_str(curr_entry.shortName);
+    // string long_str(curr_entry.longName);
+    // short_str.push_back('\0');
+    // long_str.push_back('\0');
+    // const char *short_char_ptr = short_str.c_str();
+    // const char *long_char_ptr = long_str.c_str();
+    // strncpy(short_char_array, short_char_ptr, 12);
+    // strncpy(long_char_array, long_char_ptr, 255);
+    // long_char_array[255] = '\0';
+    // short_char[12] = '\0';
+/*
+    SVMDirectoryEntry new_svm_dir = {
+        curr_entry.longName, // TODO
+        curr_entry.shortName,
+        curr_entry.filesize, 
+        curr_entry.attributes,
+        curr_entry.create_datetime, 
+        curr_entry.access_datetime,
+        curr_entry.modify_datetime, 
+    };
+    */
+
+    SVMDirectoryEntry new_svm_dir;
+    memcpy(new_svm_dir.DLongFileName, curr_entry.longName, 13);
+    
+    //new_svm_dir.DLongFileName = curr_entry.longName;
+    memcpy(new_svm_dir.DShortFileName,curr_entry.shortName,  256);
+    //new_svm_dir.DShortFileName = curr_entry.shortName;
+     new_svm_dir.DSize = curr_entry.filesize;
+     new_svm_dir.DAttributes = curr_entry.attributes;
+     new_svm_dir.DCreate = curr_entry.create_datetime;
+     new_svm_dir.DAccess = curr_entry.access_datetime;
+     new_svm_dir.DModify = curr_entry.modify_datetime;
+
+
+    // dir_list[dirdescriptor].curr_read_entry++;
+
+    *dirent = new_svm_dir;
+
     return VM_STATUS_SUCCESS;
+
 }
 
 TVMStatus VMDirectoryRewind(int dirdescriptor){
+    cout << "calling vm directory rewind\n";
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
+    int dir_size = dir_list.size();
+    if (dirdescriptor >= dir_size){
+        cout << "directory doesn't exist\n";
+        MachineResumeSignals(sigset);
+        return VM_STATUS_ERROR_INVALID_PARAMETER;
+    }
+    Directory curr_dir = dir_list[dirdescriptor];
+    if (!curr_dir.open){
+        cout << "directory hasn't been opened yet\n";
+        MachineResumeSignals(sigset);
+        return VM_STATUS_FAILURE;
+    }
+    dir_list[dirdescriptor].curr_read_entry = 0; // rewind marker for the next entry to read back to 0
+
+    MachineResumeSignals(sigset);
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryCurrent(char *abspath){
-	int cwd_size = cwd.size();
-	string new_string;
-	for (int i = 0; i < cwd_size; i++){
-		new_string = new_string + cwd[i];
-	}
-	*abspath = new_string.c_str();
+    // int cwd_size = cwd.size();
+    // string new_string;
+    // for (int i = 0; i < cwd_size; i++){
+    //  new_string = new_string + cwd[i];
+    // }  
+
+
+    // cout << "cwd: " << cwd << "\n";
+    for (int i = 0; i < cwd.size(); i++){
+        abspath[i] = cwd[i];
+    }
+    
+
+    
+    // cout << "current directory is " << abspath << "\n";
     return VM_STATUS_SUCCESS;
 }
 
 TVMStatus VMDirectoryChange(const char *path){
-	string new_path(path);
-	int path_len = new_path.size();
-	cwd.clear();
-	string path_dir;
-	for (int i = 0; i < path_len; i++){
-		if (path[i] == "/"){
-			if (i == 0){ // root dir
-				cwd.push_back("/"); // root dir
-				continue;
-			}
-			cwd.push_back(path_dir);
-			path_dir.clear();
-		}
-		else{
-			path_dir.push_back(path[i]);
-		}
-		
-	}
+    TMachineSignalStateRef sigset = NULL;
+    MachineSuspendSignals(sigset);
+    cout << "calling VMDirectoryChange\n";
+    // string new_path(path);
+    // int path_len = new_path.size();
+    // cwd.clear();
+    // string path_dir;
+    // for (int i = 0; i < path_len; i++){
+    //  if (path[i] == "/"){
+    //      if (i == 0){ // root dir
+    //          cwd.push_back("/"); // root dir
+    //          continue;
+    //      }
+    //      cwd.push_back(path_dir);
+    //      path_dir.clear();
+    //  }
+    //  else{
+    //      path_dir.push_back(path[i]);
+    //  }
+        
+    // }
+ //    return VM_STATUS_SUCCESS;
+
+    // check if we change to the root directory. If we do, then the code works
+    // 1) resolve to absolute path first:
+    string str_path(path);
+    int str_path_len = str_path.size();
+    int cwd_len = cwd.size();
+    char *abs_path = (char *)malloc(sizeof(char) * (str_path_len + cwd_len + 1));
+    cout << "finished with malloc for space for absolute path\n";
+    if (VM_STATUS_SUCCESS == VMFileSystemGetAbsolutePath(abs_path, cwd.c_str(), path)){
+        if (abs_path != "/"){
+            cout << "path is not /\n";
+            MachineResumeSignals(sigset);
+            return VM_STATUS_FAILURE; 
+        }
+        else{
+            cout << "path is /\n";
+        }
+    }
+    else {
+        cout << "failed to resolve path\n";
+        MachineResumeSignals(sigset);
+        return VM_STATUS_FAILURE;
+    }
+
+    MachineResumeSignals(sigset);
     return VM_STATUS_SUCCESS;
+
 }
 
 // Extra Credit: 
